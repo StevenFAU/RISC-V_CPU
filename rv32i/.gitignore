@@ -1,0 +1,27 @@
+# Build artifacts
+sim/*.vvp
+sim/*.vcd
+sim/*.o
+sim/*.elf
+
+# Test build artifacts
+tests/build/
+
+# Cloned riscv-tests repo (tracked separately, not part of our project)
+tests/isa/
+tests/env/encoding.h
+tests/env/LICENSE
+tests/env/p/
+tests/env/pm/
+tests/env/pt/
+tests/env/v/
+tests/env/.git
+tests/benchmarks/
+tests/debug/
+tests/mt/
+tests/configure
+tests/configure.ac
+tests/Makefile.in
+tests/.git*
+tests/LICENSE
+tests/README.md

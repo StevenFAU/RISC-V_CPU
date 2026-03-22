@@ -1,0 +1,65 @@
+# RV32I Single-Cycle RISC-V Core — Build System
+# Simulation: Icarus Verilog + GTKWave
+# Synthesis: Vivado (xc7a100tcsg324-1, Nexys4 DDR)
+
+IVERILOG = iverilog
+VVP      = vvp
+GTKWAVE  = gtkwave
+
+RTL_DIR  = rtl
+TB_DIR   = tb
+SIM_DIR  = sim
+SW_DIR   = sw
+
+# Common RTL sources (added to all compilations)
+RTL_COMMON = $(RTL_DIR)/defines.v
+
+# RISC-V toolchain
+RISCV_PREFIX ?= riscv64-unknown-elf-
+AS      = $(RISCV_PREFIX)as
+LD      = $(RISCV_PREFIX)ld
+OBJCOPY = $(RISCV_PREFIX)objcopy
+
+# ---- Simulation targets ----
+
+# Compile and run a single module testbench
+# Usage: make sim MOD=alu
+sim: $(TB_DIR)/tb_$(MOD).v $(RTL_DIR)/$(MOD).v
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_$(MOD).vvp \
+		-I $(RTL_DIR) \
+		$(RTL_COMMON) \
+		$(RTL_DIR)/$(MOD).v \
+		$(TB_DIR)/tb_$(MOD).v
+	$(VVP) $(SIM_DIR)/tb_$(MOD).vvp
+
+# Run full-core integration testbench
+sim-top:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_rv32i_core.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_rv32i_core.v
+	$(VVP) $(SIM_DIR)/tb_rv32i_core.vvp
+
+# Open GTKWave on most recent VCD for a module
+# Usage: make wave MOD=alu
+wave:
+	$(GTKWAVE) $(SIM_DIR)/tb_$(MOD).vcd &
+
+# ---- Assembly targets ----
+
+# Assemble a test program: .S -> .o -> .elf -> .hex
+# Usage: make asm PROG=test_basic
+asm: $(SW_DIR)/$(PROG).S
+	@mkdir -p $(SIM_DIR)
+	$(AS) -march=rv32i -mabi=ilp32 -o $(SIM_DIR)/$(PROG).o $(SW_DIR)/$(PROG).S
+	$(LD) -T $(SW_DIR)/link.ld -o $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG).o
+	$(OBJCOPY) -O verilog $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG).hex
+
+# ---- Cleanup ----
+
+clean:
+	rm -rf $(SIM_DIR)/*.vvp $(SIM_DIR)/*.vcd $(SIM_DIR)/*.o $(SIM_DIR)/*.elf $(SIM_DIR)/*.hex
+
+.PHONY: sim sim-top wave asm clean
