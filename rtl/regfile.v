@@ -14,6 +14,10 @@ module regfile (
 
     reg [31:0] regs [0:31];
 
+    // Initialize to zero for simulation cleanliness
+    integer i;
+    initial for (i = 0; i < 32; i = i + 1) regs[i] = 32'd0;
+
     // Async reads — x0 always returns 0
     assign rs1_data = (rs1_addr == 5'd0) ? 32'd0 : regs[rs1_addr];
     assign rs2_data = (rs2_addr == 5'd0) ? 32'd0 : regs[rs2_addr];

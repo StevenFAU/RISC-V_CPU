@@ -37,20 +37,20 @@ Create `sim/dmem_init.hex` with the string bytes:
 4. Add constraints: `constraints/nexys4ddr.xdc`
 5. Set `fpga_top` as top module
 
-## Step 2: Configure BRAM Initialization
+## Step 2: Place Hex Files
 
-In `fpga_top.v`, uncomment the `$readmemh` line:
-```verilog
-initial $readmemh("firmware.hex", u_imem.mem);
+`fpga_top.v` uses parameterized `INIT_FILE` paths (default: `firmware.hex` and
+`dmem_init.hex`). Vivado looks for these relative to the synthesis run directory.
+
+Copy both files into the Vivado project root **and** the `synth_1` run directory:
+```bash
+cp sim/firmware.hex <vivado_project>/
+cp sim/dmem_init.hex <vivado_project>/
+cp sim/firmware.hex <vivado_project>/<project_name>.runs/synth_1/
+cp sim/dmem_init.hex <vivado_project>/<project_name>.runs/synth_1/
 ```
 
-Also add DMEM initialization:
-```verilog
-initial $readmemh("dmem_init.hex", u_dmem.mem);
-```
-
-Place `firmware.hex` and `dmem_init.hex` in the Vivado project directory
-(or use absolute paths).
+No edits to `fpga_top.v` are needed — initialization is built in.
 
 ## Step 3: Synthesize
 

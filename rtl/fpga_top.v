@@ -3,10 +3,12 @@
 // Target: Artix-7 XC7A100T, 100MHz, USB-UART at 115200
 
 module fpga_top #(
-    parameter IMEM_DEPTH = 16384, // 64KB instruction memory (16K words)
-    parameter DMEM_DEPTH = 65536, // 64KB data memory (bytes)
-    parameter CLK_FREQ   = 50_000_000,  // Core runs at 50MHz (100MHz / 2)
-    parameter BAUD_RATE  = 115200
+    parameter IMEM_DEPTH    = 16384,        // 64KB instruction memory (16K words)
+    parameter DMEM_DEPTH    = 65536,        // 64KB data memory (bytes)
+    parameter IMEM_INIT     = "firmware.hex",
+    parameter DMEM_INIT     = "dmem_init.hex",
+    parameter CLK_FREQ      = 50_000_000,   // Core runs at 50MHz (100MHz / 2)
+    parameter BAUD_RATE     = 115200
 )(
     input  wire CLK100MHZ,
     input  wire CPU_RESETN,    // Active-low reset button
@@ -16,16 +18,20 @@ module fpga_top #(
     output wire LED1           // UART RX valid indicator
 );
 
-    // Active-high reset from active-low button
-    wire rst_raw = ~CPU_RESETN;
-
     // Clock divider: 100MHz -> 50MHz
     reg clk_div = 0;
     always @(posedge CLK100MHZ)
         clk_div <= ~clk_div;
 
     wire clk = clk_div;
-    wire rst = rst_raw;
+
+    // Reset synchronizer — 2-FF to avoid metastability
+    reg rst_sync1 = 1, rst_sync2 = 1;
+    always @(posedge clk) begin
+        rst_sync1 <= ~CPU_RESETN;
+        rst_sync2 <= rst_sync1;
+    end
+    wire rst = rst_sync2;
 
     // =========================================================================
     // Core bus signals
@@ -64,7 +70,7 @@ module fpga_top #(
     // =========================================================================
     // Instruction Memory
     // =========================================================================
-    imem #(.DEPTH(IMEM_DEPTH), .INIT_FILE("/home/otacon/Projects/RISC-V_CPU/rv32i/sim/firmware.hex")) u_imem (
+    imem #(.DEPTH(IMEM_DEPTH), .INIT_FILE(IMEM_INIT)) u_imem (
         .addr(imem_addr), .instr(imem_data)
     );
 
@@ -89,7 +95,7 @@ module fpga_top #(
     // =========================================================================
     // Data Memory (RAM)
     // =========================================================================
-    dmem #(.DEPTH(DMEM_DEPTH), .INIT_FILE("/home/otacon/Projects/RISC-V_CPU/rv32i/sim/dmem_init_word.hex")) u_dmem (
+    dmem #(.DEPTH(DMEM_DEPTH), .INIT_FILE(DMEM_INIT)) u_dmem (
         .clk(clk),
         .mem_read(ram_re), .mem_write(ram_we),
         .funct3(ram_funct3),

@@ -38,4 +38,4 @@ done:
 .data
 .globl hello_str
 hello_str:
-    .ascii "Hello, RISC-V!\n\0"
+    .ascii "Hello, RISC-V!\r\n\0"

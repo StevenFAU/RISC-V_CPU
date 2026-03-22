@@ -41,7 +41,6 @@ module rv32i_core (
 
     // ALU
     wire [31:0] alu_a, alu_b, alu_result;
-    wire        alu_zero;
     wire [3:0]  alu_control;
 
     // Control signals
@@ -181,7 +180,7 @@ module rv32i_core (
         .b(alu_b),
         .alu_op(alu_control),
         .result(alu_result),
-        .zero(alu_zero)
+        .zero()
     );
 
 endmodule

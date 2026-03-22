@@ -5,9 +5,11 @@
 module tb_fpga_top;
 
     // Use fast baud for simulation
+    // CLK_FREQ is the core clock (after /2 divider), BAUD_RATE is UART baud
     parameter CLK_FREQ  = 1_000_000;
     parameter BAUD_RATE = 10_000;
-    localparam CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
+    // Testbench samples on external clock (2x core clock), so double the count
+    localparam CLKS_PER_BIT = (CLK_FREQ / BAUD_RATE) * 2;
 
     reg  clk, resetn;
     wire uart_tx_out;
@@ -15,6 +17,8 @@ module tb_fpga_top;
     fpga_top #(
         .IMEM_DEPTH(256),
         .DMEM_DEPTH(256),
+        .IMEM_INIT(""),
+        .DMEM_INIT(""),
         .CLK_FREQ(CLK_FREQ),
         .BAUD_RATE(BAUD_RATE)
     ) dut (
@@ -68,12 +72,12 @@ module tb_fpga_top;
     reg [8*20-1:0] expected_str;
     integer expected_len;
     initial begin
-        expected_str = "Hello, RISC-V!\n";
-        expected_len = 15;
+        expected_str = "Hello, RISC-V!\r\n";
+        expected_len = 16;
     end
 
     // Expected bytes (easier to compare)
-    reg [7:0] expected [0:15];
+    reg [7:0] expected [0:16];
     initial begin
         expected[0]  = "H";
         expected[1]  = "e";
@@ -89,7 +93,8 @@ module tb_fpga_top;
         expected[11] = "-";
         expected[12] = "V";
         expected[13] = "!";
-        expected[14] = 8'h0A; // \n
+        expected[14] = 8'h0D; // \r
+        expected[15] = 8'h0A; // \n
     end
 
     // =========================================================================
@@ -107,7 +112,8 @@ module tb_fpga_top;
         dut.u_dmem.mem[0] = 32'h6C6C6548; // "Hell" little-endian
         dut.u_dmem.mem[1] = 32'h52202C6F; // "o, R" little-endian
         dut.u_dmem.mem[2] = 32'h2D435349; // "ISC-" little-endian
-        dut.u_dmem.mem[3] = 32'h000A2156; // "V!\n\0" little-endian
+        dut.u_dmem.mem[3] = 32'h0A0D2156; // "V!\r\n" little-endian
+        dut.u_dmem.mem[4] = 32'h00000000; // null terminator
 
         // Reset
         resetn = 0;
@@ -116,14 +122,14 @@ module tb_fpga_top;
 
         $display("--- Capturing UART output ---");
 
-        // Capture 15 bytes (length of "Hello, RISC-V!\n")
-        for (i = 0; i < 15; i = i + 1)
+        // Capture 16 bytes (length of "Hello, RISC-V!\r\n")
+        for (i = 0; i < 16; i = i + 1)
             capture_uart_byte;
 
         // Verify
         $display("\n--- Verification ---");
         pass = 0; errors = 0;
-        for (i = 0; i < 15; i = i + 1) begin
+        for (i = 0; i < 16; i = i + 1) begin
             if (rx_buffer[i] === expected[i]) begin
                 pass = pass + 1;
             end else begin
@@ -133,7 +139,7 @@ module tb_fpga_top;
         end
 
         if (errors == 0)
-            $display("*** FPGA TOP TEST PASSED — \"Hello, RISC-V!\\n\" received correctly ***");
+            $display("*** FPGA TOP TEST PASSED — \"Hello, RISC-V!\\r\\n\" received correctly ***");
         else
             $display("*** FPGA TOP TEST FAILED — %0d mismatches ***", errors);
 
