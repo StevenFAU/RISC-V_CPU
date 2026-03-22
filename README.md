@@ -54,7 +54,6 @@ The core does **not** contain internal memories — it exposes instruction fetch
 ## Directory Structure
 
 ```
-rv32i/
 ├── rtl/                  # Synthesizable Verilog
 │   ├── rv32i_core.v      # CPU core (datapath + control)
 │   ├── pc.v              # Program counter
@@ -83,16 +82,11 @@ rv32i/
 Requires [Icarus Verilog](http://iverilog.icarus.com/) and the RISC-V toolchain (`riscv64-unknown-elf-gcc`).
 
 ```bash
-cd rv32i
-
 # Run a single module testbench
 make sim MOD=alu
 
 # Run full-core integration test
 make sim-top
-
-# Run all 37 rv32ui compliance tests
-cd tests && make run-all
 
 # Assemble firmware
 riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
@@ -100,13 +94,48 @@ riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
 python3 sim/make_imem_hex.py sim/hello.hex sim/firmware.hex
 ```
 
+### Compliance Tests
+
+The compliance tests require the [riscv-tests](https://github.com/riscv-software-src/riscv-tests) repo. To set up:
+
+```bash
+# Clone riscv-tests into the tests/ directory
+cd tests
+git clone https://github.com/riscv-software-src/riscv-tests.git .tmp
+mv .tmp/isa isa
+mv .tmp/benchmarks benchmarks
+git clone https://github.com/riscv-software-src/riscv-test-env.git env_upstream
+cp -r env_upstream/p env/p
+cp env_upstream/encoding.h env/encoding.h
+rm -rf .tmp env_upstream
+
+# Run all 37 rv32ui tests
+make run-all
+
+# Run a single test
+make run TEST=add
+```
+
 ## FPGA Synthesis
 
-Requires Vivado 2023.x+ (free WebPACK edition). See [docs/synth_guide.md](rv32i/docs/synth_guide.md) for step-by-step instructions.
+Requires Vivado 2023.x+ (free WebPACK edition). See [docs/synth_guide.md](docs/synth_guide.md) for step-by-step instructions.
 
 **Target:** Nexys4 DDR (Artix-7 XC7A100T)
 **Core clock:** 50 MHz (100 MHz / 2 divider)
 **Timing:** WNS +0.338 ns (met)
+
+### Resource Utilization
+
+| Resource       | Used  | Available | %      |
+|----------------|-------|-----------|--------|
+| Slice LUTs     | 9,711 | 63,400    | 15.32% |
+| — as Logic     | 1,475 |           | 2.33%  |
+| — as Memory    | 8,236 | 19,000    | 43.35% |
+| Slice FFs      | 114   | 126,800   | 0.09%  |
+| Block RAM      | 0     | 135       | 0.00%  |
+| DSP            | 0     | 240       | 0.00%  |
+
+Note: IMEM and DMEM are currently mapped to distributed RAM (LUT RAM) rather than block RAM. This uses more LUTs but meets timing. A future optimization would restructure the memory interfaces for BRAM inference.
 
 ### Pin Assignments
 
@@ -139,4 +168,4 @@ srl srli sub sw xor xori
 
 ## License
 
-MIT
+[MIT](LICENSE)

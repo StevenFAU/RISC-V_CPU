@@ -1,3 +1,13 @@
+# Vivado project directories
+RISC-V_CPU_v1/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.srcs/
+*.xpr
+
 # Build artifacts
 sim/*.vvp
 sim/*.vcd
