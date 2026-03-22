@@ -1,8 +1,10 @@
-// Data Memory — byte-addressable, supports LB/LH/LW/LBU/LHU and SB/SH/SW
+// Data Memory — word-based storage with byte enables for BRAM inference
+// Supports LB/LH/LW/LBU/LHU and SB/SH/SW
 `include "defines.v"
 
 module dmem #(
-    parameter DEPTH = 4096  // Bytes
+    parameter DEPTH     = 4096,  // Bytes (must be multiple of 4)
+    parameter INIT_FILE = ""
 )(
     input  wire        clk,
     input  wire        mem_read,
@@ -13,44 +15,81 @@ module dmem #(
     output reg  [31:0] read_data
 );
 
-    reg [7:0] mem [0:DEPTH-1];
+    // Word-based storage for BRAM inference
+    localparam WORDS = DEPTH / 4;
+    reg [31:0] mem [0:WORDS-1];
 
-    wire [31:0] byte_addr = addr;
+    // Optional initialization from hex file (word-addressed)
+    generate
+        if (INIT_FILE != "") begin : gen_init
+            initial $readmemh(INIT_FILE, mem);
+        end
+    endgenerate
 
-    // --- Read (combinational) ---
+    wire [31:0] word_addr = addr[31:2];
+    wire [1:0]  byte_off  = addr[1:0];
+
+    // Read the full word from memory
+    wire [31:0] raw_word = mem[word_addr];
+
+    // --- Read (combinational) — extract and sign/zero extend ---
     always @(*) begin
         case (funct3)
-            `F3_BYTE:   // LB — sign-extended byte
-                read_data = {{24{mem[byte_addr][7]}}, mem[byte_addr]};
-            `F3_HALF:   // LH — sign-extended halfword
-                read_data = {{16{mem[byte_addr+1][7]}}, mem[byte_addr+1], mem[byte_addr]};
-            `F3_WORD:   // LW — full word (little-endian)
-                read_data = {mem[byte_addr+3], mem[byte_addr+2], mem[byte_addr+1], mem[byte_addr]};
-            `F3_BYTEU:  // LBU — zero-extended byte
-                read_data = {24'd0, mem[byte_addr]};
-            `F3_HALFU:  // LHU — zero-extended halfword
-                read_data = {16'd0, mem[byte_addr+1], mem[byte_addr]};
+            `F3_BYTE: begin  // LB — sign-extended byte
+                case (byte_off)
+                    2'd0: read_data = {{24{raw_word[7]}},  raw_word[7:0]};
+                    2'd1: read_data = {{24{raw_word[15]}}, raw_word[15:8]};
+                    2'd2: read_data = {{24{raw_word[23]}}, raw_word[23:16]};
+                    2'd3: read_data = {{24{raw_word[31]}}, raw_word[31:24]};
+                endcase
+            end
+            `F3_HALF: begin  // LH — sign-extended halfword
+                case (byte_off[1])
+                    1'b0: read_data = {{16{raw_word[15]}}, raw_word[15:0]};
+                    1'b1: read_data = {{16{raw_word[31]}}, raw_word[31:16]};
+                endcase
+            end
+            `F3_WORD:    // LW — full word
+                read_data = raw_word;
+            `F3_BYTEU: begin  // LBU — zero-extended byte
+                case (byte_off)
+                    2'd0: read_data = {24'd0, raw_word[7:0]};
+                    2'd1: read_data = {24'd0, raw_word[15:8]};
+                    2'd2: read_data = {24'd0, raw_word[23:16]};
+                    2'd3: read_data = {24'd0, raw_word[31:24]};
+                endcase
+            end
+            `F3_HALFU: begin  // LHU — zero-extended halfword
+                case (byte_off[1])
+                    1'b0: read_data = {16'd0, raw_word[15:0]};
+                    1'b1: read_data = {16'd0, raw_word[31:16]};
+                endcase
+            end
             default:
                 read_data = 32'd0;
         endcase
     end
 
-    // --- Write (synchronous) ---
+    // --- Write (synchronous) — byte-enable pattern for BRAM ---
     always @(posedge clk) begin
         if (mem_write) begin
             case (funct3)
-                `F3_BYTE:   // SB
-                    mem[byte_addr] <= write_data[7:0];
-                `F3_HALF: begin // SH (little-endian)
-                    mem[byte_addr]   <= write_data[7:0];
-                    mem[byte_addr+1] <= write_data[15:8];
+                `F3_BYTE: begin  // SB
+                    case (byte_off)
+                        2'd0: mem[word_addr][7:0]   <= write_data[7:0];
+                        2'd1: mem[word_addr][15:8]  <= write_data[7:0];
+                        2'd2: mem[word_addr][23:16] <= write_data[7:0];
+                        2'd3: mem[word_addr][31:24] <= write_data[7:0];
+                    endcase
                 end
-                `F3_WORD: begin // SW (little-endian)
-                    mem[byte_addr]   <= write_data[7:0];
-                    mem[byte_addr+1] <= write_data[15:8];
-                    mem[byte_addr+2] <= write_data[23:16];
-                    mem[byte_addr+3] <= write_data[31:24];
+                `F3_HALF: begin  // SH (little-endian)
+                    case (byte_off[1])
+                        1'b0: mem[word_addr][15:0]  <= write_data[15:0];
+                        1'b1: mem[word_addr][31:16] <= write_data[15:0];
+                    endcase
                 end
+                `F3_WORD:  // SW
+                    mem[word_addr] <= write_data;
                 default: ; // No write
             endcase
         end

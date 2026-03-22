@@ -103,22 +103,11 @@ module tb_fpga_top;
         // Load firmware into IMEM (word-addressed hex) and DMEM (string data)
         $readmemh("sim/firmware.hex", dut.u_imem.mem);
         // Load string data into DMEM at offset 0 (bus decoder strips base address)
-        dut.u_dmem.mem[0] = "H";
-        dut.u_dmem.mem[1] = "e";
-        dut.u_dmem.mem[2] = "l";
-        dut.u_dmem.mem[3] = "l";
-        dut.u_dmem.mem[4] = "o";
-        dut.u_dmem.mem[5] = ",";
-        dut.u_dmem.mem[6] = " ";
-        dut.u_dmem.mem[7] = "R";
-        dut.u_dmem.mem[8] = "I";
-        dut.u_dmem.mem[9] = "S";
-        dut.u_dmem.mem[10] = "C";
-        dut.u_dmem.mem[11] = "-";
-        dut.u_dmem.mem[12] = "V";
-        dut.u_dmem.mem[13] = "!";
-        dut.u_dmem.mem[14] = 8'h0A;
-        dut.u_dmem.mem[15] = 8'h00;
+        // DMEM is now word-based: mem[0] = {byte3, byte2, byte1, byte0}
+        dut.u_dmem.mem[0] = 32'h6C6C6548; // "Hell" little-endian
+        dut.u_dmem.mem[1] = 32'h52202C6F; // "o, R" little-endian
+        dut.u_dmem.mem[2] = 32'h2D435349; // "ISC-" little-endian
+        dut.u_dmem.mem[3] = 32'h000A2156; // "V!\n\0" little-endian
 
         // Reset
         resetn = 0;

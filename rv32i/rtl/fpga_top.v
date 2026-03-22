@@ -5,7 +5,7 @@
 module fpga_top #(
     parameter IMEM_DEPTH = 16384, // 64KB instruction memory (16K words)
     parameter DMEM_DEPTH = 65536, // 64KB data memory (bytes)
-    parameter CLK_FREQ   = 100_000_000,
+    parameter CLK_FREQ   = 50_000_000,  // Core runs at 50MHz (100MHz / 2)
     parameter BAUD_RATE  = 115200
 )(
     input  wire CLK100MHZ,
@@ -17,8 +17,15 @@ module fpga_top #(
 );
 
     // Active-high reset from active-low button
-    wire rst = ~CPU_RESETN;
-    wire clk = CLK100MHZ;
+    wire rst_raw = ~CPU_RESETN;
+
+    // Clock divider: 100MHz -> 50MHz
+    reg clk_div = 0;
+    always @(posedge CLK100MHZ)
+        clk_div <= ~clk_div;
+
+    wire clk = clk_div;
+    wire rst = rst_raw;
 
     // =========================================================================
     // Core bus signals
@@ -57,16 +64,10 @@ module fpga_top #(
     // =========================================================================
     // Instruction Memory
     // =========================================================================
-    imem #(.DEPTH(IMEM_DEPTH)) u_imem (
+    imem #(.DEPTH(IMEM_DEPTH), .INIT_FILE("/home/otacon/Projects/RISC-V_CPU/rv32i/sim/firmware.hex")) u_imem (
         .addr(imem_addr), .instr(imem_data)
     );
 
-    // Firmware initialization — Vivado synthesizes this as block RAM
-    // For simulation, the testbench loads firmware directly.
-    // synthesis translate_off
-    // synthesis translate_on
-    // For synthesis: uncomment the following line and provide firmware.hex
-    // initial $readmemh("firmware.hex", u_imem.mem);
 
     // =========================================================================
     // Bus Decoder — routes data bus to RAM or UART
@@ -88,7 +89,7 @@ module fpga_top #(
     // =========================================================================
     // Data Memory (RAM)
     // =========================================================================
-    dmem #(.DEPTH(DMEM_DEPTH)) u_dmem (
+    dmem #(.DEPTH(DMEM_DEPTH), .INIT_FILE("/home/otacon/Projects/RISC-V_CPU/rv32i/sim/dmem_init_word.hex")) u_dmem (
         .clk(clk),
         .mem_read(ram_re), .mem_write(ram_we),
         .funct3(ram_funct3),
