@@ -17,35 +17,37 @@ A single-cycle RV32I RISC-V processor implemented in Verilog, targeting the Digi
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ rv32i_core                                          │
-│  ┌────┐  ┌──────┐  ┌────────┐  ┌─────┐  ┌───────┐ │
-│  │ PC │→│ IMEM  │→│ Control │→│ ALU  │→│ WB Mux│ │
-│  └────┘  │ Bus   │  │ Decode  │  └─────┘  └───────┘ │
-│          └──────┘  └────────┘                       │
-│  ┌────────┐  ┌────────┐  ┌──────┐                   │
-│  │Regfile │  │ImmGen  │  │ DMEM │                   │
-│  └────────┘  └────────┘  │ Bus  │                   │
-│                          └──────┘                   │
-└─────────────────────────────────────────────────────┘
-         │                        │
-    imem_addr/data          dmem_addr/data/we/re/funct3
-         │                        │
-┌────────┴────────┐    ┌──────────┴──────────┐
-│      IMEM       │    │    wb_master        │
-│  (16K words)    │    │ (core → Wishbone)   │
-└─────────────────┘    └──────────┬──────────┘
-                                  │
-                       ┌──────────┴──────────┐
-                       │  wb_interconnect    │
-                       │  (address decode)   │
-                       ├──────┬──────┬───────┤
-                       │      │      │       │
-                  ┌────┴┐ ┌──┴──┐ ┌─┴──┐ ┌──┴───┐
-                  │DMEM │ │UART │ │GPIO│ │TIMER │
-                  │64KB │ │TX/RX│ │LED │ │CLINT │
-                  └─────┘ └─────┘ │ SW │ └──────┘
-                                  └────┘
++--------------------------------------------------------+
+| rv32i_core                                             |
+|                                                        |
+|  +----+   +------+   +---------+   +-----+   +------+  |
+|  | PC |-->| IMEM |-->| Control |-->| ALU |-->|WB Mux|  |
+|  +----+   | Bus  |   | Decode  |   +-----+   +------+  |
+|           +------+   +---------+                       |
+|                                                        |
+|  +--------+  +--------+  +------+                      |
+|  |Regfile |  |ImmGen  |  | DMEM |                      |
+|  +--------+  +--------+  | Bus  |                      |
+|                          +------+                      |
++--------------------------------------------------------+
+        |                         |
+   imem_addr/data       dmem_addr/data/we/re/funct3
+        |                         |
++-------+--------+   +-----------+-----------+
+|      IMEM      |   |       wb_master       |
+|  (16K words)   |   |   (core -> Wishbone)  |
++----------------+   +-----------+-----------+
+                                 |
+                     +-----------+-----------+
+                     |    wb_interconnect    |
+                     |    (address decode)   |
+                     +-----------+-----------+
+                       |      |     |      |
+                +------+ +-----+ +-----+ +-------+
+                | DMEM | |UART | |GPIO | |TIMER  |
+                | 64KB | |TX/RX| | LED | |CLINT  |
+                +------+ +-----+ | SW  | +-------+
+                                 +-----+
 ```
 
 The core does **not** contain internal memories — it exposes instruction fetch and data memory bus ports. Memory, peripherals, and bus routing are instantiated by the top-level wrapper (`fpga_top.v`), making the core ready for SoC integration.
