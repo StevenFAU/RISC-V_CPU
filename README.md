@@ -91,8 +91,13 @@ make sim-top
 # Assemble firmware
 riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
     -T sw/hello_link.ld -o sim/hello.elf sw/hello.S
-python3 sim/make_imem_hex.py sim/hello.hex sim/firmware.hex
+riscv64-unknown-elf-objcopy -O verilog sim/hello.elf sim/hello_byte.hex
+python3 sim/make_imem_hex.py sim/hello_byte.hex sim/firmware.hex
 ```
+
+> **Note:** Simulation may emit `$readmemh` warnings about insufficient words in hex files.
+> This is expected — test programs are smaller than the full memory arrays. These warnings
+> are harmless and do not affect results.
 
 ### Compliance Tests
 
