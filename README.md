@@ -112,7 +112,7 @@ make sim MOD=alu
 make sim-top
 
 # Run FPGA top-level UART test (Hello, RISC-V!)
-make sim MOD=fpga_top
+make sim-fpga
 
 # Assemble firmware
 riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
