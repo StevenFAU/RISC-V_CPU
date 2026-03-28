@@ -77,7 +77,7 @@ module wb_uart #(
     reg rx_clear_pending;
     reg rx_clear;
 
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst) begin
             rx_valid_latch   <= 1'b0;
             rx_data_latch    <= 8'd0;

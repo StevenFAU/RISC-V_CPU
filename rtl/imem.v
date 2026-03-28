@@ -15,7 +15,9 @@ module imem #(
     output wire [31:0] instr
 );
 
-    reg [31:0] mem [0:DEPTH-1];
+    // ram_style = "block" guides Vivado to infer BRAM when SYNC_READ=1.
+    // For SYNC_READ=0 (async read), Vivado ignores this and uses distributed RAM.
+    (* ram_style = "block" *) reg [31:0] mem [0:DEPTH-1];
 
     generate
         if (INIT_FILE != "") begin : gen_init
@@ -23,16 +25,19 @@ module imem #(
         end
     endgenerate
 
+    // Bound address to actual depth — unbounded addr[31:2] can block BRAM inference
+    wire [$clog2(DEPTH)-1:0] word_addr = addr[$clog2(DEPTH)+1:2];
+
     generate
         if (SYNC_READ) begin : gen_sync
-            // Registered read — Vivado infers BRAM automatically
+            // Registered read — Vivado infers BRAM
             reg [31:0] instr_reg;
             always @(posedge clk)
-                instr_reg <= mem[addr[31:2]];
+                instr_reg <= mem[word_addr];
             assign instr = instr_reg;
         end else begin : gen_async
             // Combinational read — distributed RAM
-            assign instr = mem[addr[31:2]];
+            assign instr = mem[word_addr];
         end
     endgenerate
 

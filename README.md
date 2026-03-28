@@ -114,11 +114,8 @@ make sim-top
 # Run FPGA top-level UART test (Hello, RISC-V!)
 make sim-fpga
 
-# Assemble firmware
-riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
-    -T sw/hello_link.ld -o sim/hello.elf sw/hello.S
-riscv64-unknown-elf-objcopy -O verilog sim/hello.elf sim/hello_byte.hex
-python3 sim/make_imem_hex.py sim/hello_byte.hex sim/firmware.hex
+# Assemble a test program (uses sw/link.ld, outputs to sim/)
+make asm PROG=test_basic
 ```
 
 > **Note:** Simulation may emit `$readmemh` warnings about insufficient words in hex files.

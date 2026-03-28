@@ -6,7 +6,7 @@
 - Top module: `fpga_top`
 - Tool: Vivado 2025.2
 
-## Resource Utilization
+## Resource Utilization (pre-BRAM, baseline)
 
 | Resource       | Used  | Available | %      |
 |----------------|-------|-----------|--------|
@@ -27,11 +27,13 @@
 
 ## Notes
 
-- IMEM (16K x 32-bit) and DMEM (16K x 32-bit) mapped to distributed RAM (LUT RAM),
-  not block RAM. This accounts for the high LUT-as-Memory usage (43.35%).
-- The byte-enable read/write pattern in dmem.v prevents Vivado from inferring BRAM.
-  A future optimization could use separate read/write address ports or Vivado RAM
-  primitives to force BRAM inference, freeing ~8,200 LUTs.
+- **IMEM BRAM migration (pending re-synthesis):** `imem.v` now uses `SYNC_READ=1`
+  with `(* ram_style = "block" *)` and bounded address width. Vivado should infer
+  ~14 BRAM36 blocks for IMEM (16K x 32-bit = 512 Kbit), dropping LUT-as-Memory
+  from ~8,236 to ~4,100 (DMEM only). Re-run synthesis to confirm and update this table.
+- DMEM (16K x 32-bit) remains as distributed RAM (LUT RAM). Combinational reads
+  are required by the single-cycle core — BRAM synchronous reads would need pipeline
+  changes. Explicitly marked with `(* ram_style = "distributed" *)`.
 - At 100 MHz the design failed timing (WNS -8.527 ns). The /2 clock divider was
   added to meet timing at 50 MHz with comfortable margin.
 - Core logic uses only ~1,475 LUTs (2.33%), leaving substantial room for the
