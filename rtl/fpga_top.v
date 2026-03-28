@@ -1,5 +1,5 @@
 // FPGA Top-Level Wrapper for Nexys4 DDR
-// Instantiates: rv32i_core, imem, dmem, bus_decoder, uart_tx, uart_rx
+// Instantiates: rv32i_core, imem, wb_master, wb_interconnect, wb_dmem, uart_tx, uart_rx
 // Target: Artix-7 XC7A100T, 100MHz, USB-UART at 115200
 
 module fpga_top #(
@@ -42,18 +42,34 @@ module fpga_top #(
     wire [2:0]  dmem_funct3;
     wire [31:0] debug_pc, debug_instr;
 
-    // RAM bus (from bus decoder)
-    wire [31:0] ram_addr, ram_wdata, ram_rdata;
-    wire        ram_we, ram_re;
-    wire [2:0]  ram_funct3;
+    // =========================================================================
+    // Wishbone master signals
+    // =========================================================================
+    wire        wb_cyc, wb_stb, wb_we;
+    wire [31:0] wb_adr, wb_dat_m2s;
+    wire [3:0]  wb_sel;
+    wire [31:0] wb_dat_s2m;
+    wire        wb_ack;
+    wire [2:0]  wb_funct3;
 
-    // UART signals
+    // =========================================================================
+    // Wishbone slave signals — DMEM (slave 0)
+    // =========================================================================
+    wire        wbs0_cyc, wbs0_stb, wbs0_we;
+    wire [31:0] wbs0_adr, wbs0_dat_m2s;
+    wire [3:0]  wbs0_sel;
+    wire [31:0] wbs0_dat_s2m;
+    wire        wbs0_ack;
+    wire [2:0]  wbs0_funct3;
+
+    // =========================================================================
+    // UART signals (directly wired for Phase 1 — UART not yet on Wishbone)
+    // =========================================================================
     wire [7:0]  uart_tx_data;
     wire        uart_tx_send;
     wire        uart_tx_busy;
     wire [7:0]  uart_rx_data;
     wire        uart_rx_valid;
-    wire        uart_rx_clear;
 
     // =========================================================================
     // CPU Core
@@ -74,38 +90,52 @@ module fpga_top #(
         .addr(imem_addr), .instr(imem_data)
     );
 
-
     // =========================================================================
-    // Bus Decoder — routes data bus to RAM or UART
+    // Wishbone Master Bridge
     // =========================================================================
-    bus_decoder u_bus (
-        .clk(clk), .rst(rst),
+    wb_master u_wb_master (
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_we(dmem_we), .dmem_re(dmem_re),
         .dmem_funct3(dmem_funct3), .dmem_rdata(dmem_rdata),
-        .ram_addr(ram_addr), .ram_wdata(ram_wdata),
-        .ram_we(ram_we), .ram_re(ram_re),
-        .ram_funct3(ram_funct3), .ram_rdata(ram_rdata),
-        .uart_tx_data(uart_tx_data), .uart_tx_send(uart_tx_send),
-        .uart_tx_busy(uart_tx_busy),
-        .uart_rx_data(uart_rx_data), .uart_rx_valid(uart_rx_valid),
-        .uart_rx_clear(uart_rx_clear)
+        .wb_cyc_o(wb_cyc), .wb_stb_o(wb_stb), .wb_we_o(wb_we),
+        .wb_adr_o(wb_adr), .wb_dat_o(wb_dat_m2s), .wb_sel_o(wb_sel),
+        .wb_dat_i(wb_dat_s2m), .wb_ack_i(wb_ack),
+        .wb_funct3_o(wb_funct3)
     );
 
     // =========================================================================
-    // Data Memory (RAM)
+    // Wishbone Interconnect
     // =========================================================================
-    dmem #(.DEPTH(DMEM_DEPTH), .INIT_FILE(DMEM_INIT)) u_dmem (
-        .clk(clk),
-        .mem_read(ram_re), .mem_write(ram_we),
-        .funct3(ram_funct3),
-        .addr(ram_addr), .write_data(ram_wdata),
-        .read_data(ram_rdata)
+    wb_interconnect u_wb_ic (
+        .wbm_cyc_i(wb_cyc), .wbm_stb_i(wb_stb), .wbm_we_i(wb_we),
+        .wbm_adr_i(wb_adr), .wbm_dat_i(wb_dat_m2s), .wbm_sel_i(wb_sel),
+        .wbm_dat_o(wb_dat_s2m), .wbm_ack_o(wb_ack),
+        .wbm_funct3_i(wb_funct3),
+        // Slave 0: DMEM
+        .wbs0_cyc_o(wbs0_cyc), .wbs0_stb_o(wbs0_stb), .wbs0_we_o(wbs0_we),
+        .wbs0_adr_o(wbs0_adr), .wbs0_dat_o(wbs0_dat_m2s), .wbs0_sel_o(wbs0_sel),
+        .wbs0_dat_i(wbs0_dat_s2m), .wbs0_ack_i(wbs0_ack),
+        .wbs0_funct3_o(wbs0_funct3)
     );
 
     // =========================================================================
-    // UART
+    // Data Memory (Wishbone Slave)
     // =========================================================================
+    wb_dmem #(.DEPTH(DMEM_DEPTH), .INIT_FILE(DMEM_INIT)) u_wb_dmem (
+        .clk(clk), .rst(rst),
+        .wb_cyc_i(wbs0_cyc), .wb_stb_i(wbs0_stb), .wb_we_i(wbs0_we),
+        .wb_adr_i(wbs0_adr), .wb_dat_i(wbs0_dat_m2s), .wb_sel_i(wbs0_sel),
+        .wb_dat_o(wbs0_dat_s2m), .wb_ack_o(wbs0_ack),
+        .wb_funct3_i(wbs0_funct3)
+    );
+
+    // =========================================================================
+    // UART (not yet on Wishbone — Phase 2)
+    // TX/RX modules still instantiated for LED indicators
+    // =========================================================================
+    assign uart_tx_data = 8'd0;
+    assign uart_tx_send = 1'b0;
+
     uart_tx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_uart_tx (
         .clk(clk), .rst(rst),
         .data(uart_tx_data), .send(uart_tx_send),

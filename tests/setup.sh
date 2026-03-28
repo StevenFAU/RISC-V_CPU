@@ -12,14 +12,15 @@ if [ -d "isa" ]; then
     exit 0
 fi
 
-echo "Cloning riscv-tests..."
-git clone --depth 1 https://github.com/riscv-software-src/riscv-tests.git .tmp
+echo "Cloning riscv-tests (with submodules for env/encoding.h)..."
+git clone --depth 1 --recurse-submodules --shallow-submodules \
+    https://github.com/riscv-software-src/riscv-tests.git .tmp
 
 echo "Extracting test sources..."
 mv .tmp/isa isa
 
 # Get encoding.h from the test environment (needed by test macros)
-if [ ! -f env/encoding.h ]; then
+if [ ! -f env/encoding.h ] && [ -f .tmp/env/encoding.h ]; then
     cp .tmp/env/encoding.h env/encoding.h
 fi
 

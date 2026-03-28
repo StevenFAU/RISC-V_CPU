@@ -1,5 +1,5 @@
 // Integration Testbench for RV32I Single-Cycle Core
-// Instantiates external IMEM and DMEM, wires them to the core's bus ports.
+// Wires core through Wishbone stack: wb_master → wb_interconnect → wb_dmem
 `timescale 1ns/1ps
 
 module tb_rv32i_core;
@@ -16,6 +16,20 @@ module tb_rv32i_core;
     wire        dmem_we, dmem_re;
     wire [2:0]  dmem_funct3;
 
+    // Wishbone master signals
+    wire        wb_cyc, wb_stb, wb_we;
+    wire [31:0] wb_adr, wb_dat_m2s, wb_dat_s2m;
+    wire [3:0]  wb_sel;
+    wire        wb_ack;
+    wire [2:0]  wb_funct3;
+
+    // Wishbone slave 0 (DMEM) signals
+    wire        wbs0_cyc, wbs0_stb, wbs0_we;
+    wire [31:0] wbs0_adr, wbs0_dat_m2s, wbs0_dat_s2m;
+    wire [3:0]  wbs0_sel;
+    wire        wbs0_ack;
+    wire [2:0]  wbs0_funct3;
+
     rv32i_core uut (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
@@ -29,15 +43,33 @@ module tb_rv32i_core;
         .addr(imem_addr), .instr(imem_data)
     );
 
-    // Strip upper bits to match bus decoder behavior (DMEM at 0x00010000-0x0001FFFF)
-    wire [31:0] dmem_addr_masked = {16'd0, dmem_addr[15:0]};
+    wb_master u_wb_master (
+        .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
+        .dmem_we(dmem_we), .dmem_re(dmem_re),
+        .dmem_funct3(dmem_funct3), .dmem_rdata(dmem_rdata),
+        .wb_cyc_o(wb_cyc), .wb_stb_o(wb_stb), .wb_we_o(wb_we),
+        .wb_adr_o(wb_adr), .wb_dat_o(wb_dat_m2s), .wb_sel_o(wb_sel),
+        .wb_dat_i(wb_dat_s2m), .wb_ack_i(wb_ack),
+        .wb_funct3_o(wb_funct3)
+    );
 
-    dmem #(.DEPTH(DMEM_DEPTH)) u_dmem (
-        .clk(clk),
-        .mem_read(dmem_re), .mem_write(dmem_we),
-        .funct3(dmem_funct3),
-        .addr(dmem_addr_masked), .write_data(dmem_wdata),
-        .read_data(dmem_rdata)
+    wb_interconnect u_wb_ic (
+        .wbm_cyc_i(wb_cyc), .wbm_stb_i(wb_stb), .wbm_we_i(wb_we),
+        .wbm_adr_i(wb_adr), .wbm_dat_i(wb_dat_m2s), .wbm_sel_i(wb_sel),
+        .wbm_dat_o(wb_dat_s2m), .wbm_ack_o(wb_ack),
+        .wbm_funct3_i(wb_funct3),
+        .wbs0_cyc_o(wbs0_cyc), .wbs0_stb_o(wbs0_stb), .wbs0_we_o(wbs0_we),
+        .wbs0_adr_o(wbs0_adr), .wbs0_dat_o(wbs0_dat_m2s), .wbs0_sel_o(wbs0_sel),
+        .wbs0_dat_i(wbs0_dat_s2m), .wbs0_ack_i(wbs0_ack),
+        .wbs0_funct3_o(wbs0_funct3)
+    );
+
+    wb_dmem #(.DEPTH(DMEM_DEPTH)) u_wb_dmem (
+        .clk(clk), .rst(rst),
+        .wb_cyc_i(wbs0_cyc), .wb_stb_i(wbs0_stb), .wb_we_i(wbs0_we),
+        .wb_adr_i(wbs0_adr), .wb_dat_i(wbs0_dat_m2s), .wb_sel_i(wbs0_sel),
+        .wb_dat_o(wbs0_dat_s2m), .wb_ack_o(wbs0_ack),
+        .wb_funct3_i(wbs0_funct3)
     );
 
     initial clk = 0;
@@ -47,8 +79,8 @@ module tb_rv32i_core;
     integer i;
 
     // Signature: test_basic.S stores 0xDEADBEEF at DMEM[0x00010000]
-    // Bus decoder strips upper bits, so it lands at word 0 in DMEM
-    wire [31:0] sig_word = u_dmem.mem[0];
+    // wb_dmem strips upper bits, so it lands at word 0 in inner dmem
+    wire [31:0] sig_word = u_wb_dmem.u_dmem.mem[0];
 
     initial begin
         $dumpfile("sim/tb_rv32i_core.vcd");
