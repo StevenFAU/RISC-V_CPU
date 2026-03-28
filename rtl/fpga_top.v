@@ -36,7 +36,7 @@ module fpga_top #(
     // =========================================================================
     // Core bus signals
     // =========================================================================
-    wire [31:0] imem_addr, imem_data;
+    wire [31:0] imem_addr, imem_addr_next, imem_data;
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire        dmem_we, dmem_re;
     wire [2:0]  dmem_funct3;
@@ -96,6 +96,7 @@ module fpga_top #(
     rv32i_core u_core (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
+        .imem_addr_next(imem_addr_next),
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),
@@ -105,8 +106,10 @@ module fpga_top #(
     // =========================================================================
     // Instruction Memory
     // =========================================================================
-    imem #(.DEPTH(IMEM_DEPTH), .INIT_FILE(IMEM_INIT)) u_imem (
-        .addr(imem_addr), .instr(imem_data)
+    // SYNC_READ=1: BRAM mode — addr driven by imem_addr_next (= pc_next)
+    // so registered output aligns with pc_current after the clock edge
+    imem #(.DEPTH(IMEM_DEPTH), .INIT_FILE(IMEM_INIT), .SYNC_READ(1)) u_imem (
+        .clk(clk), .addr(imem_addr_next), .instr(imem_data)
     );
 
     // =========================================================================

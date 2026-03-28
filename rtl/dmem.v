@@ -18,9 +18,10 @@ module dmem #(
     output reg  [31:0] read_data
 );
 
-    // Word-based storage for BRAM inference
+    // Word-based storage — distributed RAM (async read required for single-cycle loads)
+    // BRAM inference requires synchronous reads, which would need pipeline changes.
     localparam WORDS = DEPTH / 4;
-    reg [31:0] mem [0:WORDS-1];
+    (* ram_style = "distributed" *) reg [31:0] mem [0:WORDS-1];
 
     // Optional initialization from hex file (word-addressed)
     generate

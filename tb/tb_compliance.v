@@ -19,7 +19,7 @@ module tb_compliance;
     // =========================================================================
     // Core bus signals
     // =========================================================================
-    wire [31:0] imem_addr, imem_data;
+    wire [31:0] imem_addr, imem_addr_next, imem_data;
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire        dmem_we, dmem_re;
     wire [2:0]  dmem_funct3;
@@ -31,6 +31,7 @@ module tb_compliance;
     rv32i_core dut (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
+        .imem_addr_next(imem_addr_next),
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),

@@ -18,6 +18,9 @@ module rv32i_core (
     output wire        dmem_re,
     output wire [2:0]  dmem_funct3,
 
+    // Pre-fetch address for BRAM-based IMEM (= pc_next, forced to 0 during reset)
+    output wire [31:0] imem_addr_next,
+
     // Debug/RVFI access to architectural state
     output wire [31:0] debug_pc,
     output wire [31:0] debug_instr
@@ -63,8 +66,9 @@ module rv32i_core (
     // =========================================================================
     // Bus outputs
     // =========================================================================
-    assign imem_addr    = pc_current;
-    assign dmem_addr    = alu_result;
+    assign imem_addr      = pc_current;
+    assign imem_addr_next = rst ? 32'd0 : pc_next;
+    assign dmem_addr      = alu_result;
     assign dmem_wdata   = rs2_data;
     assign dmem_we      = mem_write;
     assign dmem_re      = mem_read;

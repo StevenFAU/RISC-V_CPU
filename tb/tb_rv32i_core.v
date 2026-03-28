@@ -11,7 +11,7 @@ module tb_rv32i_core;
     parameter MAX_CYCLES = 500;
 
     // Core bus signals
-    wire [31:0] imem_addr, imem_data;
+    wire [31:0] imem_addr, imem_addr_next, imem_data;
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire        dmem_we, dmem_re;
     wire [2:0]  dmem_funct3;
@@ -33,14 +33,16 @@ module tb_rv32i_core;
     rv32i_core uut (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
+        .imem_addr_next(imem_addr_next),
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
 
+    // Async read (SYNC_READ=0) — testbench uses pc_current, not pc_next
     imem #(.DEPTH(IMEM_DEPTH)) u_imem (
-        .addr(imem_addr), .instr(imem_data)
+        .clk(clk), .addr(imem_addr), .instr(imem_data)
     );
 
     wb_master u_wb_master (
