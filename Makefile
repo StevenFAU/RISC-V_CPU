@@ -11,8 +11,8 @@ TB_DIR   = tb
 SIM_DIR  = sim
 SW_DIR   = sw
 
-# Common RTL sources (added to all compilations)
-RTL_COMMON = $(RTL_DIR)/defines.v
+# All RTL sources (exclude fpga_top.v to avoid $readmemh warnings in unit tests)
+RTL_ALL = $(filter-out $(RTL_DIR)/fpga_top.v, $(wildcard $(RTL_DIR)/*.v))
 
 # RISC-V toolchain
 RISCV_PREFIX ?= riscv64-unknown-elf-
@@ -24,12 +24,11 @@ OBJCOPY = $(RISCV_PREFIX)objcopy
 
 # Compile and run a single module testbench
 # Usage: make sim MOD=alu
-sim: $(TB_DIR)/tb_$(MOD).v $(RTL_DIR)/$(MOD).v
+sim: $(TB_DIR)/tb_$(MOD).v
 	@mkdir -p $(SIM_DIR)
 	$(IVERILOG) -o $(SIM_DIR)/tb_$(MOD).vvp \
 		-I $(RTL_DIR) \
-		$(RTL_COMMON) \
-		$(RTL_DIR)/$(MOD).v \
+		$(RTL_ALL) \
 		$(TB_DIR)/tb_$(MOD).v
 	$(VVP) $(SIM_DIR)/tb_$(MOD).vvp
 
