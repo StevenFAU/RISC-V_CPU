@@ -1,5 +1,5 @@
 // FPGA Top-Level Wrapper for Nexys4 DDR
-// Instantiates: rv32i_core, imem, wb_master, wb_interconnect, wb_dmem, uart_tx, uart_rx
+// Instantiates: rv32i_core, imem, wb_master, wb_interconnect, wb_dmem, wb_uart
 // Target: Artix-7 XC7A100T, 100MHz, USB-UART at 115200
 
 module fpga_top #(
@@ -63,13 +63,13 @@ module fpga_top #(
     wire [2:0]  wbs0_funct3;
 
     // =========================================================================
-    // UART signals (directly wired for Phase 1 — UART not yet on Wishbone)
+    // Wishbone slave signals — UART (slave 1)
     // =========================================================================
-    wire [7:0]  uart_tx_data;
-    wire        uart_tx_send;
-    wire        uart_tx_busy;
-    wire [7:0]  uart_rx_data;
-    wire        uart_rx_valid;
+    wire        wbs1_cyc, wbs1_stb, wbs1_we;
+    wire [31:0] wbs1_adr, wbs1_dat_m2s;
+    wire [3:0]  wbs1_sel;
+    wire [31:0] wbs1_dat_s2m;
+    wire        wbs1_ack;
 
     // =========================================================================
     // CPU Core
@@ -115,11 +115,15 @@ module fpga_top #(
         .wbs0_cyc_o(wbs0_cyc), .wbs0_stb_o(wbs0_stb), .wbs0_we_o(wbs0_we),
         .wbs0_adr_o(wbs0_adr), .wbs0_dat_o(wbs0_dat_m2s), .wbs0_sel_o(wbs0_sel),
         .wbs0_dat_i(wbs0_dat_s2m), .wbs0_ack_i(wbs0_ack),
-        .wbs0_funct3_o(wbs0_funct3)
+        .wbs0_funct3_o(wbs0_funct3),
+        // Slave 1: UART
+        .wbs1_cyc_o(wbs1_cyc), .wbs1_stb_o(wbs1_stb), .wbs1_we_o(wbs1_we),
+        .wbs1_adr_o(wbs1_adr), .wbs1_dat_o(wbs1_dat_m2s), .wbs1_sel_o(wbs1_sel),
+        .wbs1_dat_i(wbs1_dat_s2m), .wbs1_ack_i(wbs1_ack)
     );
 
     // =========================================================================
-    // Data Memory (Wishbone Slave)
+    // Data Memory (Wishbone Slave 0)
     // =========================================================================
     wb_dmem #(.DEPTH(DMEM_DEPTH), .INIT_FILE(DMEM_INIT)) u_wb_dmem (
         .clk(clk), .rst(rst),
@@ -130,28 +134,21 @@ module fpga_top #(
     );
 
     // =========================================================================
-    // UART (not yet on Wishbone — Phase 2)
-    // TX/RX modules still instantiated for LED indicators
+    // UART (Wishbone Slave 1)
     // =========================================================================
-    assign uart_tx_data = 8'd0;
-    assign uart_tx_send = 1'b0;
-
-    uart_tx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_uart_tx (
+    wb_uart #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_wb_uart (
         .clk(clk), .rst(rst),
-        .data(uart_tx_data), .send(uart_tx_send),
-        .tx(UART_RXD_OUT), .busy(uart_tx_busy)
-    );
-
-    uart_rx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_uart_rx (
-        .clk(clk), .rst(rst),
-        .rx(UART_TXD_IN),
-        .data(uart_rx_data), .valid(uart_rx_valid)
+        .wb_cyc_i(wbs1_cyc), .wb_stb_i(wbs1_stb), .wb_we_i(wbs1_we),
+        .wb_adr_i(wbs1_adr), .wb_dat_i(wbs1_dat_m2s), .wb_sel_i(wbs1_sel),
+        .wb_dat_o(wbs1_dat_s2m), .wb_ack_o(wbs1_ack),
+        .uart_tx(UART_RXD_OUT),
+        .uart_rx(UART_TXD_IN)
     );
 
     // =========================================================================
     // Debug LEDs
     // =========================================================================
-    assign LED0 = uart_tx_busy;
-    assign LED1 = uart_rx_valid;
+    assign LED0 = u_wb_uart.tx_busy;
+    assign LED1 = u_wb_uart.rx_valid_latch;
 
 endmodule
