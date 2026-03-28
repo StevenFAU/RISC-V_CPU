@@ -29,11 +29,14 @@ module tb_rv32i_core;
         .addr(imem_addr), .instr(imem_data)
     );
 
+    // Strip upper bits to match bus decoder behavior (DMEM at 0x00010000-0x0001FFFF)
+    wire [31:0] dmem_addr_masked = {16'd0, dmem_addr[15:0]};
+
     dmem #(.DEPTH(DMEM_DEPTH)) u_dmem (
         .clk(clk),
         .mem_read(dmem_re), .mem_write(dmem_we),
         .funct3(dmem_funct3),
-        .addr(dmem_addr), .write_data(dmem_wdata),
+        .addr(dmem_addr_masked), .write_data(dmem_wdata),
         .read_data(dmem_rdata)
     );
 
@@ -43,9 +46,9 @@ module tb_rv32i_core;
     integer cycle_count;
     integer i;
 
-    // Signature: test_basic.S stores 0xDEADBEEF at DMEM address 0
-    wire [31:0] sig_word = {u_dmem.mem[3], u_dmem.mem[2],
-                            u_dmem.mem[1], u_dmem.mem[0]};
+    // Signature: test_basic.S stores 0xDEADBEEF at DMEM[0x00010000]
+    // Bus decoder strips upper bits, so it lands at word 0 in DMEM
+    wire [31:0] sig_word = u_dmem.mem[0];
 
     initial begin
         $dumpfile("sim/tb_rv32i_core.vcd");

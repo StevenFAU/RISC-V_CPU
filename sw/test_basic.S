@@ -1,6 +1,6 @@
 # test_basic.S — Basic integration test for RV32I core
 # Exercises: R-type, I-type, Load/Store, Branch, Jump, LUI, AUIPC
-# Stores 0xDEADBEEF at DMEM[0] on success
+# Stores 0xDEADBEEF at DMEM[0x00010000] on success
 
 .text
 .globl _start
@@ -63,14 +63,7 @@ jalr_target:
     addi x21, x0, 4          # x21 = 4 (JALR worked)
 
     # --- Store/Load test ---
-    # Prepare pass signature
-    lui  x24, 0xDEADB        # x24 = 0xDEADB000
-    addi x24, x24, 0xEEF     # Would give 0xDEADB000 + 0xFFFFFEEF due to sign ext
-    # Use a different approach: build 0xDEADBEEF
-    lui  x24, 0xDEADC        # x24 = 0xDEADC000 (LUI rounds up because ADDI will subtract)
-    addi x24, x24, -529      # x24 = 0xDEADC000 + 0xFFFFFDEF = 0xDEADBDEF — wrong approach
-
-    # Simplest approach: construct via shifts and ors
+    # Construct 0xDEADBEEF via shifts and ors
     addi x24, x0, 0x0DE      # x24 = 0xDE
     slli x24, x24, 8         # x24 = 0xDE00
     addi x25, x0, 0x0AD      # x25 = 0xAD
@@ -82,12 +75,9 @@ jalr_target:
     addi x25, x0, 0x0EF      # x25 = 0xEF
     or   x24, x24, x25       # x24 = 0xDEADBEEF
 
-    # Store to DMEM base address (0x00010000 is DMEM base, but our DMEM addr
-    # is computed by ALU, so store at offset 0 from a base register)
-    # The DMEM in the testbench sits at address 0 in its own array
-    # ALU result feeds into DMEM addr — we need to store at a low addr
-    addi x26, x0, 0          # x26 = 0 (DMEM offset)
-    sw   x24, 0(x26)         # Store 0xDEADBEEF at address 0
+    # Store to DMEM base address (0x00010000)
+    lui  x26, 0x10           # x26 = 0x00010000 (DMEM base)
+    sw   x24, 0(x26)         # Store 0xDEADBEEF at DMEM[0x00010000]
 
     # Verify with load
     lw   x27, 0(x26)         # x27 should = 0xDEADBEEF

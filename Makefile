@@ -54,8 +54,10 @@ wave:
 asm: $(SW_DIR)/$(PROG).S
 	@mkdir -p $(SIM_DIR)
 	$(AS) -march=rv32i -mabi=ilp32 -o $(SIM_DIR)/$(PROG).o $(SW_DIR)/$(PROG).S
-	$(LD) -T $(SW_DIR)/link.ld -o $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG).o
-	$(OBJCOPY) -O verilog $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG).hex
+	$(LD) -m elf32lriscv -T $(SW_DIR)/link.ld -o $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG).o
+	$(OBJCOPY) -O verilog $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG)_byte.hex
+	python3 $(SIM_DIR)/make_imem_hex.py $(SIM_DIR)/$(PROG)_byte.hex $(SIM_DIR)/$(PROG).hex
+	@rm -f $(SIM_DIR)/$(PROG)_byte.hex
 
 # ---- Cleanup ----
 
