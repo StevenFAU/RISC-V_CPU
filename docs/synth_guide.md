@@ -22,7 +22,7 @@ via the bus decoder's address masking).
 
 Create `sim/dmem_init.hex` with the string bytes:
 ```
-48 65 6C 6C 6F 2C 20 52 49 53 43 2D 56 21 0A 00
+48 65 6C 6C 6F 2C 20 52 49 53 43 2D 56 21 0D 0A 00
 ```
 
 ## Step 1: Create Vivado Project
@@ -65,8 +65,7 @@ No edits to `fpga_top.v` are needed — initialization is built in.
 
 1. Run **Implementation** (Flow → Run Implementation)
 2. Check **Timing Summary**:
-   - WNS (Worst Negative Slack) must be ≥ 0 for 100MHz
-   - If negative, consider adding a clock divider or optimizing critical path
+   - WNS must be ≥ 0. The core meets timing at 50 MHz (100 MHz board clock with /2 divider). If WNS is negative, check critical path in timing report.
 
 ## Step 5: Generate Bitstream
 
@@ -105,7 +104,7 @@ No edits to `fpga_top.v` are needed — initialization is built in.
 
 - **No output**: Check UART pin assignment — `UART_RXD_OUT` (D4) is FPGA TX, `UART_TXD_IN` (C4) is FPGA RX. These names are from the FTDI chip's perspective.
 - **Garbled output**: Verify baud rate is 115200 in both hardware (CLK_FREQ/BAUD_RATE) and terminal.
-- **Timing failure**: The single-cycle design should easily meet 100MHz on Artix-7. If not, check for combinational loops.
+- **Timing failure at 50 MHz**: The single-cycle design meets timing at 50 MHz. At 100 MHz it fails with ~8.5 ns negative slack due to the combinational path through distributed RAM. Future BRAM migration should improve this.
 - **BRAM not initialized**: Ensure hex files are in the correct Vivado project path.
 
 ## Resource Budget

@@ -154,10 +154,12 @@ All 37 RV32I user-mode integer instruction tests pass:
 
 ```
 add addi and andi auipc beq bge bgeu blt bltu bne
-fence_i jal jalr lb lbu lh lhu lui lw or ori
-sb sh simple sll slli slt slti sltiu sltu sra srai
+jal jalr lb lbu lh lhu lui lw or ori
+sb sh sll slli slt slti sltiu sltu sra srai
 srl srli sub sw xor xori
 ```
+
+(fence_i excluded — requires instruction cache, not applicable to single-cycle)
 
 ## Future Work
 
