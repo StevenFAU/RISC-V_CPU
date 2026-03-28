@@ -39,7 +39,17 @@ module wb_interconnect (
     output wire [31:0] wbs1_dat_o,
     output wire [3:0]  wbs1_sel_o,
     input  wire [31:0] wbs1_dat_i,
-    input  wire        wbs1_ack_i
+    input  wire        wbs1_ack_i,
+
+    // Slave 2: GPIO
+    output wire        wbs2_cyc_o,
+    output wire        wbs2_stb_o,
+    output wire        wbs2_we_o,
+    output wire [31:0] wbs2_adr_o,
+    output wire [31:0] wbs2_dat_o,
+    output wire [3:0]  wbs2_sel_o,
+    input  wire [31:0] wbs2_dat_i,
+    input  wire        wbs2_ack_i
 );
 
     // =========================================================================
@@ -47,6 +57,7 @@ module wb_interconnect (
     // =========================================================================
     wire sel_dmem = (wbm_adr_i[31:16] == 16'h0001);
     wire sel_uart = (wbm_adr_i[31:12] == 20'h80000);
+    wire sel_gpio = (wbm_adr_i[31:12] == 20'h80001);
 
     // =========================================================================
     // Slave 0: DMEM — steering
@@ -70,6 +81,16 @@ module wb_interconnect (
     assign wbs1_sel_o = wbm_sel_i;
 
     // =========================================================================
+    // Slave 2: GPIO — steering
+    // =========================================================================
+    assign wbs2_cyc_o = wbm_cyc_i & sel_gpio;
+    assign wbs2_stb_o = wbm_stb_i & sel_gpio;
+    assign wbs2_we_o  = wbm_we_i;
+    assign wbs2_adr_o = wbm_adr_i;
+    assign wbs2_dat_o = wbm_dat_i;
+    assign wbs2_sel_o = wbm_sel_i;
+
+    // =========================================================================
     // Return mux — route selected slave's dat/ack back to master
     // =========================================================================
     always @(*) begin
@@ -79,6 +100,9 @@ module wb_interconnect (
         end else if (sel_uart) begin
             wbm_dat_o = wbs1_dat_i;
             wbm_ack_o = wbs1_ack_i;
+        end else if (sel_gpio) begin
+            wbm_dat_o = wbs2_dat_i;
+            wbm_ack_o = wbs2_ack_i;
         end else begin
             wbm_dat_o = 32'd0;
             wbm_ack_o = 1'b0;

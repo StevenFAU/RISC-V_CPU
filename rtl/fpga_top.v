@@ -14,8 +14,8 @@ module fpga_top #(
     input  wire CPU_RESETN,    // Active-low reset button
     input  wire UART_TXD_IN,  // FTDI TX -> FPGA RX (data into FPGA)
     output wire UART_RXD_OUT, // FPGA TX -> FTDI RX (data out of FPGA)
-    output wire LED0,          // UART TX busy indicator
-    output wire LED1           // UART RX valid indicator
+    output wire [15:0] LED,    // GPIO output → LEDs
+    input  wire [15:0] SW      // GPIO input  ← Slide switches
 );
 
     // Clock divider: 100MHz -> 50MHz
@@ -72,6 +72,15 @@ module fpga_top #(
     wire        wbs1_ack;
 
     // =========================================================================
+    // Wishbone slave signals — GPIO (slave 2)
+    // =========================================================================
+    wire        wbs2_cyc, wbs2_stb, wbs2_we;
+    wire [31:0] wbs2_adr, wbs2_dat_m2s;
+    wire [3:0]  wbs2_sel;
+    wire [31:0] wbs2_dat_s2m;
+    wire        wbs2_ack;
+
+    // =========================================================================
     // CPU Core
     // =========================================================================
     rv32i_core u_core (
@@ -119,7 +128,11 @@ module fpga_top #(
         // Slave 1: UART
         .wbs1_cyc_o(wbs1_cyc), .wbs1_stb_o(wbs1_stb), .wbs1_we_o(wbs1_we),
         .wbs1_adr_o(wbs1_adr), .wbs1_dat_o(wbs1_dat_m2s), .wbs1_sel_o(wbs1_sel),
-        .wbs1_dat_i(wbs1_dat_s2m), .wbs1_ack_i(wbs1_ack)
+        .wbs1_dat_i(wbs1_dat_s2m), .wbs1_ack_i(wbs1_ack),
+        // Slave 2: GPIO
+        .wbs2_cyc_o(wbs2_cyc), .wbs2_stb_o(wbs2_stb), .wbs2_we_o(wbs2_we),
+        .wbs2_adr_o(wbs2_adr), .wbs2_dat_o(wbs2_dat_m2s), .wbs2_sel_o(wbs2_sel),
+        .wbs2_dat_i(wbs2_dat_s2m), .wbs2_ack_i(wbs2_ack)
     );
 
     // =========================================================================
@@ -146,9 +159,15 @@ module fpga_top #(
     );
 
     // =========================================================================
-    // Debug LEDs
+    // GPIO (Wishbone Slave 2)
     // =========================================================================
-    assign LED0 = u_wb_uart.tx_busy;
-    assign LED1 = u_wb_uart.rx_valid_latch;
+    wb_gpio u_wb_gpio (
+        .clk(clk), .rst(rst),
+        .wb_cyc_i(wbs2_cyc), .wb_stb_i(wbs2_stb), .wb_we_i(wbs2_we),
+        .wb_adr_i(wbs2_adr), .wb_dat_i(wbs2_dat_m2s), .wb_sel_i(wbs2_sel),
+        .wb_dat_o(wbs2_dat_s2m), .wb_ack_o(wbs2_ack),
+        .gpio_out(LED),
+        .gpio_in(SW)
+    );
 
 endmodule
