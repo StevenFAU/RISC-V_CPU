@@ -80,21 +80,44 @@ module tb_bus_decoder;
         rst = 0;
         repeat (5) @(posedge clk);
 
-        // ===== Test 1: RAM write and read =====
-        // Write 0xCAFEBABE to RAM address 0x00000000
-        dmem_addr = 32'h0000_0000; dmem_wdata = 32'hCAFEBABE;
+        // ===== Test 1: RAM write and read (DMEM range) =====
+        // Write 0xCAFEBABE to RAM address 0x00010000
+        dmem_addr = 32'h0001_0000; dmem_wdata = 32'hCAFEBABE;
         dmem_we = 1; dmem_funct3 = 3'b010; // SW
         @(posedge clk); #1;
         dmem_we = 0;
         @(posedge clk);
 
         // Read it back
-        dmem_re = 1; dmem_addr = 32'h0000_0000; dmem_funct3 = 3'b010; // LW
+        dmem_re = 1; dmem_addr = 32'h0001_0000; dmem_funct3 = 3'b010; // LW
         @(posedge clk); #1;
         if (dmem_rdata === 32'hCAFEBABE) begin
-            $display("PASS: RAM write/read 0xCAFEBABE"); pass = pass + 1;
+            $display("PASS: RAM write/read 0xCAFEBABE at DMEM base"); pass = pass + 1;
         end else begin
             $display("FAIL: RAM read — expected 0xCAFEBABE, got 0x%08h", dmem_rdata); fail = fail + 1;
+        end
+        dmem_re = 0;
+        @(posedge clk);
+
+        // ===== Test 1b: Unmapped write — RAM we stays low =====
+        dmem_addr = 32'h0002_0000; dmem_wdata = 32'hDEAD_DEAD;
+        dmem_we = 1; dmem_funct3 = 3'b010;
+        @(posedge clk); #1;
+        if (ram_we === 1'b0) begin
+            $display("PASS: Unmapped write (0x00020000) does not hit RAM"); pass = pass + 1;
+        end else begin
+            $display("FAIL: Unmapped write leaked to RAM"); fail = fail + 1;
+        end
+        dmem_we = 0;
+        @(posedge clk);
+
+        // ===== Test 1c: Unmapped read — returns 0 =====
+        dmem_addr = 32'h0002_0000; dmem_re = 1; dmem_funct3 = 3'b010;
+        @(posedge clk); #1;
+        if (dmem_rdata === 32'd0) begin
+            $display("PASS: Unmapped read (0x00020000) returns 0"); pass = pass + 1;
+        end else begin
+            $display("FAIL: Unmapped read — expected 0, got 0x%08h", dmem_rdata); fail = fail + 1;
         end
         dmem_re = 0;
         @(posedge clk);

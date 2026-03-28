@@ -43,8 +43,9 @@ module bus_decoder (
     // =========================================================================
     // Address decode — top 4 bits determine peripheral
     // =========================================================================
-    wire sel_uart = (dmem_addr[31:28] == 4'h8);  // 0x8xxxxxxx -> UART
-    wire sel_ram  = ~sel_uart;                     // Everything else -> RAM
+    wire sel_uart = (dmem_addr[31:28] == 4'h8);                    // 0x8xxxxxxx -> UART
+    wire sel_ram  = (dmem_addr[31:16] == 16'h0001);                // 0x00010000-0x0001FFFF -> RAM
+    wire sel_none = ~sel_uart & ~sel_ram;                           // Unmapped
 
     // =========================================================================
     // RAM pass-through (active when not UART)
@@ -120,8 +121,10 @@ module bus_decoder (
                 end
                 default: dmem_rdata = 32'd0;
             endcase
+        end else if (sel_ram) begin
+            dmem_rdata = ram_rdata;
         end else begin
-            dmem_rdata = ram_rdata; // Default: RAM read data
+            dmem_rdata = 32'd0;  // Unmapped address
         end
     end
 
