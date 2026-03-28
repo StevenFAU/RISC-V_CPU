@@ -1,5 +1,5 @@
 // FPGA Top-Level Wrapper for Nexys4 DDR
-// Instantiates: rv32i_core, imem, wb_master, wb_interconnect, wb_dmem, wb_uart
+// Instantiates: rv32i_core, imem, wb_master, wb_interconnect, wb_dmem, wb_uart, wb_gpio, wb_timer
 // Target: Artix-7 XC7A100T, 100MHz, USB-UART at 115200
 
 module fpga_top #(
@@ -81,6 +81,16 @@ module fpga_top #(
     wire        wbs2_ack;
 
     // =========================================================================
+    // Wishbone slave signals — Timer (slave 3)
+    // =========================================================================
+    wire        wbs3_cyc, wbs3_stb, wbs3_we;
+    wire [31:0] wbs3_adr, wbs3_dat_m2s;
+    wire [3:0]  wbs3_sel;
+    wire [31:0] wbs3_dat_s2m;
+    wire        wbs3_ack;
+    wire        timer_irq;
+
+    // =========================================================================
     // CPU Core
     // =========================================================================
     rv32i_core u_core (
@@ -132,7 +142,11 @@ module fpga_top #(
         // Slave 2: GPIO
         .wbs2_cyc_o(wbs2_cyc), .wbs2_stb_o(wbs2_stb), .wbs2_we_o(wbs2_we),
         .wbs2_adr_o(wbs2_adr), .wbs2_dat_o(wbs2_dat_m2s), .wbs2_sel_o(wbs2_sel),
-        .wbs2_dat_i(wbs2_dat_s2m), .wbs2_ack_i(wbs2_ack)
+        .wbs2_dat_i(wbs2_dat_s2m), .wbs2_ack_i(wbs2_ack),
+        // Slave 3: Timer
+        .wbs3_cyc_o(wbs3_cyc), .wbs3_stb_o(wbs3_stb), .wbs3_we_o(wbs3_we),
+        .wbs3_adr_o(wbs3_adr), .wbs3_dat_o(wbs3_dat_m2s), .wbs3_sel_o(wbs3_sel),
+        .wbs3_dat_i(wbs3_dat_s2m), .wbs3_ack_i(wbs3_ack)
     );
 
     // =========================================================================
@@ -168,6 +182,17 @@ module fpga_top #(
         .wb_dat_o(wbs2_dat_s2m), .wb_ack_o(wbs2_ack),
         .gpio_out(LED),
         .gpio_in(SW)
+    );
+
+    // =========================================================================
+    // Timer (Wishbone Slave 3)
+    // =========================================================================
+    wb_timer u_wb_timer (
+        .clk(clk), .rst(rst),
+        .wb_cyc_i(wbs3_cyc), .wb_stb_i(wbs3_stb), .wb_we_i(wbs3_we),
+        .wb_adr_i(wbs3_adr), .wb_dat_i(wbs3_dat_m2s), .wb_sel_i(wbs3_sel),
+        .wb_dat_o(wbs3_dat_s2m), .wb_ack_o(wbs3_ack),
+        .timer_irq(timer_irq)
     );
 
 endmodule
