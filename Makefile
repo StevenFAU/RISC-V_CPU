@@ -37,7 +37,7 @@ sim-top:
 	@mkdir -p $(SIM_DIR)
 	$(IVERILOG) -o $(SIM_DIR)/tb_rv32i_core.vvp \
 		-I $(RTL_DIR) \
-		$(wildcard $(RTL_DIR)/*.v) \
+		$(RTL_ALL) \
 		$(TB_DIR)/tb_rv32i_core.v
 	$(VVP) $(SIM_DIR)/tb_rv32i_core.vvp
 

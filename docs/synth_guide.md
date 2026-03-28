@@ -7,20 +7,20 @@
 
 ## Step 0: Prepare Firmware
 
-The word-addressed hex file for IMEM initialization is at `sim/firmware.hex`.
-To regenerate:
+The IMEM initialization file (`sim/firmware.hex`) is checked into the repo and ready to use.
+To regenerate it from source (requires `riscv64-unknown-elf-gcc`):
+
 ```bash
-cd rv32i
+# Build hello.S → word-addressed hex for IMEM
 riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
     -T sw/hello_link.ld -o sim/hello.elf sw/hello.S
-python3 sim/make_imem_hex.py sim/hello.hex sim/firmware.hex
+riscv64-unknown-elf-objcopy -O verilog sim/hello.elf sim/hello_byte.hex
+python3 sim/make_imem_hex.py sim/hello_byte.hex sim/firmware.hex
+rm -f sim/hello_byte.hex
 ```
 
-For Vivado, you also need the data section loaded into DMEM. The string
-"Hello, RISC-V!\n" lives at DMEM offset 0 (address 0x10000 maps to DMEM[0]
-via the bus decoder's address masking).
-
-Create `sim/dmem_init.hex` with the string bytes:
+The data section (string bytes for "Hello, RISC-V!\r\n") must also be loaded into DMEM.
+The checked-in `sim/dmem_init.hex` contains:
 ```
 48 65 6C 6C 6F 2C 20 52 49 53 43 2D 56 21 0D 0A 00
 ```

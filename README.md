@@ -99,15 +99,9 @@ python3 sim/make_imem_hex.py sim/hello.hex sim/firmware.hex
 The compliance tests require the [riscv-tests](https://github.com/riscv-software-src/riscv-tests) repo. To set up:
 
 ```bash
-# Clone riscv-tests into the tests/ directory
+# One-time setup: download test sources
 cd tests
-git clone https://github.com/riscv-software-src/riscv-tests.git .tmp
-mv .tmp/isa isa
-mv .tmp/benchmarks benchmarks
-git clone https://github.com/riscv-software-src/riscv-test-env.git env_upstream
-cp -r env_upstream/p env/p
-cp env_upstream/encoding.h env/encoding.h
-rm -rf .tmp env_upstream
+./setup.sh
 
 # Run all 37 rv32ui tests
 make run-all
