@@ -7,8 +7,9 @@ module dmem #(
     parameter INIT_FILE = ""
 )(
     input  wire        clk,
-    // Note: mem_read is currently unused — reads are unconditional (combinational).
-    // Retained for future bus integration where read-enable gating may be needed.
+    // Note: mem_read is accepted but unused — reads are unconditional (combinational).
+    // Connected by wb_dmem.v for interface completeness; removing would require
+    // changing all instantiation sites for no functional benefit.
     input  wire        mem_read,
     input  wire        mem_write,
     input  wire [2:0]  funct3,

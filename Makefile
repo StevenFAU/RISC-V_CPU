@@ -41,6 +41,15 @@ sim-top:
 		$(TB_DIR)/tb_rv32i_core.v
 	$(VVP) $(SIM_DIR)/tb_rv32i_core.vvp
 
+# Run FPGA top-level testbench (includes fpga_top.v; needs sim/firmware.hex)
+sim-fpga:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top.vvp
+
 # Open GTKWave on most recent VCD for a module
 # Usage: make wave MOD=alu
 wave:
@@ -63,4 +72,4 @@ asm: $(SW_DIR)/$(PROG).S
 clean:
 	rm -rf $(SIM_DIR)/*.vvp $(SIM_DIR)/*.vcd $(SIM_DIR)/*.o $(SIM_DIR)/*.elf $(SIM_DIR)/*.hex
 
-.PHONY: sim sim-top wave asm clean
+.PHONY: sim sim-top sim-fpga wave asm clean

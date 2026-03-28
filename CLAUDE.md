@@ -74,6 +74,8 @@ Use **Wishbone B4 classic single-cycle** (not pipelined or burst — keep it sim
 
 For classic single-cycle: `cyc` and `stb` assert together, slave responds with `ack` in the same cycle (combinational ack for SRAM-like peripherals). No wait states for phase 1.
 
+**Known Limitation:** The current `wb_master.v` is zero-wait-state only. It accepts `wb_ack_i` for port compliance but does not use it to gate read data or stall the core. All slaves must return combinational ack. Future peripherals with latency (external SRAM, SPI flash, PCIe) will require upgrading `wb_master` to feed a stall/ready signal back into `rv32i_core`.
+
 ### New Address Map
 
 | Region       | Address Range             | Size   | Slave Module        |

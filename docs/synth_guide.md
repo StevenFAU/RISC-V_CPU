@@ -29,11 +29,14 @@ The checked-in `sim/dmem_init.hex` contains:
 
 1. Open Vivado → Create Project → RTL Project
 2. Part: `xc7a100tcsg324-1`
-3. Add RTL sources from `rtl/`:
-   - `rv32i_core.v`, `pc.v`, `regfile.v`, `immgen.v`, `control.v`
-   - `alu_decoder.v`, `alu.v`, `imem.v`, `dmem.v`
-   - `bus_decoder.v`, `uart_tx.v`, `uart_rx.v`
-   - `fpga_top.v`, `defines.v`
+3. Add all RTL sources from `rtl/`:
+   - Core: `rv32i_core.v`, `pc.v`, `regfile.v`, `immgen.v`, `control.v`,
+     `alu_decoder.v`, `alu.v`, `defines.v`
+   - Memory: `imem.v`, `dmem.v`
+   - Wishbone bus: `wb_master.v`, `wb_interconnect.v`, `wb_dmem.v`
+   - Peripherals: `wb_uart.v`, `wb_gpio.v`, `wb_timer.v`,
+     `uart_tx.v`, `uart_rx.v`
+   - Top: `fpga_top.v`
 4. Add constraints: `constraints/nexys4ddr.xdc`
 5. Set `fpga_top` as top module
 

@@ -8,7 +8,7 @@ module pc (
     output reg  [31:0] pc
 );
 
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst)
             pc <= 32'h0000_0000;
         else

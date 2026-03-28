@@ -1,6 +1,13 @@
-// Wishbone B4 Master Bridge
+// Wishbone B4 Master Bridge — Zero-Wait-State
 // Translates rv32i_core dmem bus signals to Wishbone B4 classic interface.
 // Generates wb_sel from funct3 + addr[1:0] per RISC-V load/store encoding.
+//
+// LIMITATION: This bridge assumes all slaves return ack and read data
+// combinationally in the same cycle (zero wait states). wb_ack_i is
+// accepted as a port for Wishbone compliance but is not used to gate
+// dmem_rdata or stall the core. Adding wait-state support requires a
+// stall/ready signal back into rv32i_core (not yet implemented).
+// Any future slave with non-zero latency will need this bridge upgraded.
 `include "defines.v"
 
 module wb_master (

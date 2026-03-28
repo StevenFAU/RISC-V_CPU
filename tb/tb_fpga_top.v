@@ -13,6 +13,7 @@ module tb_fpga_top;
 
     reg  clk, resetn;
     wire uart_tx_out;
+    wire [15:0] led;
 
     fpga_top #(
         .IMEM_DEPTH(256),
@@ -26,8 +27,8 @@ module tb_fpga_top;
         .CPU_RESETN(resetn),
         .UART_TXD_IN(1'b1),     // RX idle high (not used in this test)
         .UART_RXD_OUT(uart_tx_out),
-        .LED0(),
-        .LED1()
+        .LED(led),
+        .SW(16'd0)
     );
 
     initial clk = 0;
@@ -69,14 +70,6 @@ module tb_fpga_top;
     // =========================================================================
     // Expected string
     // =========================================================================
-    reg [8*20-1:0] expected_str;
-    integer expected_len;
-    initial begin
-        expected_str = "Hello, RISC-V!\r\n";
-        expected_len = 16;
-    end
-
-    // Expected bytes (easier to compare)
     reg [7:0] expected [0:16];
     initial begin
         expected[0]  = "H";
@@ -103,17 +96,15 @@ module tb_fpga_top;
     integer i, pass, errors;
 
     initial begin
-        // Skip VCD dump — large memory arrays make it impractical
-
-        // Load firmware into IMEM (word-addressed hex) and DMEM (string data)
+        // Load firmware into IMEM (word-addressed hex)
         $readmemh("sim/firmware.hex", dut.u_imem.mem);
-        // Load string data into DMEM at offset 0 (bus decoder strips base address)
-        // DMEM is now word-based: mem[0] = {byte3, byte2, byte1, byte0}
-        dut.u_dmem.mem[0] = 32'h6C6C6548; // "Hell" little-endian
-        dut.u_dmem.mem[1] = 32'h52202C6F; // "o, R" little-endian
-        dut.u_dmem.mem[2] = 32'h2D435349; // "ISC-" little-endian
-        dut.u_dmem.mem[3] = 32'h0A0D2156; // "V!\r\n" little-endian
-        dut.u_dmem.mem[4] = 32'h00000000; // null terminator
+        // Load string data into DMEM at offset 0 (wb_dmem strips base address)
+        // DMEM is word-based: mem[0] = {byte3, byte2, byte1, byte0}
+        dut.u_wb_dmem.u_dmem.mem[0] = 32'h6C6C6548; // "Hell" little-endian
+        dut.u_wb_dmem.u_dmem.mem[1] = 32'h52202C6F; // "o, R" little-endian
+        dut.u_wb_dmem.u_dmem.mem[2] = 32'h2D435349; // "ISC-" little-endian
+        dut.u_wb_dmem.u_dmem.mem[3] = 32'h0A0D2156; // "V!\r\n" little-endian
+        dut.u_wb_dmem.u_dmem.mem[4] = 32'h00000000; // null terminator
 
         // Reset
         resetn = 0;

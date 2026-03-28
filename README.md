@@ -7,9 +7,11 @@ A single-cycle RV32I RISC-V processor implemented in Verilog, targeting the Digi
 - Full RV32I instruction set (37/37 rv32ui compliance tests pass)
 - Single-cycle datapath: PC, register file, ALU, immediate generator, control unit
 - External memory bus ports (SoC-ready architecture)
+- Wishbone B4 classic bus fabric with 4 slave peripherals
 - Byte-addressable data memory with LB/LH/LW/LBU/LHU/SB/SH/SW support
 - Memory-mapped UART TX/RX (115200 baud, 8N1)
-- Bus decoder for RAM/UART address space routing
+- Memory-mapped GPIO (16 LEDs + 16 slide switches)
+- CLINT-style 64-bit timer with comparator and IRQ output
 - FPGA-verified: prints "Hello, RISC-V!" over USB-UART
 
 ## Architecture
@@ -27,29 +29,45 @@ A single-cycle RV32I RISC-V processor implemented in Verilog, targeting the Digi
 │                          └──────┘                   │
 └─────────────────────────────────────────────────────┘
          │                        │
-    imem_addr/data          dmem_addr/data/we/re
+    imem_addr/data          dmem_addr/data/we/re/funct3
          │                        │
 ┌────────┴────────┐    ┌──────────┴──────────┐
-│      IMEM       │    │    Bus Decoder      │
-│  (16K words)    │    │  ┌──────┐ ┌──────┐  │
-└─────────────────┘    │  │ DMEM │ │ UART │  │
-                       │  │(64KB)│ │TX/RX │  │
-                       │  └──────┘ └──────┘  │
-                       └─────────────────────┘
+│      IMEM       │    │    wb_master        │
+│  (16K words)    │    │ (core → Wishbone)   │
+└─────────────────┘    └──────────┬──────────┘
+                                  │
+                       ┌──────────┴──────────┐
+                       │  wb_interconnect    │
+                       │  (address decode)   │
+                       ├──────┬──────┬───────┤
+                       │      │      │       │
+                  ┌────┴┐ ┌──┴──┐ ┌─┴──┐ ┌──┴───┐
+                  │DMEM │ │UART │ │GPIO│ │TIMER │
+                  │64KB │ │TX/RX│ │LED │ │CLINT │
+                  └─────┘ └─────┘ │ SW │ └──────┘
+                                  └────┘
 ```
 
 The core does **not** contain internal memories — it exposes instruction fetch and data memory bus ports. Memory, peripherals, and bus routing are instantiated by the top-level wrapper (`fpga_top.v`), making the core ready for SoC integration.
 
+The Wishbone interconnect routes the core's data bus to the correct slave based on address. Each peripheral is a standard Wishbone B4 slave — new peripherals plug in by adding a slave port and address decode line.
+
 ## Memory Map
 
-| Region         | Address Range           | Size  | Notes                     |
-|----------------|-------------------------|-------|---------------------------|
-| IMEM           | 0x00000000 - 0x0000FFFF | 64 KB | 16K words, read-only      |
-| DMEM (RAM)     | 0x00010000 - 0x0001FFFF | 64 KB | Byte-addressable, R/W     |
-| UART TX Data   | 0x80000000              | 1 word| Write byte to transmit    |
-| UART TX Status | 0x80000004              | 1 word| Bit 0: TX busy            |
-| UART RX Data   | 0x80000008              | 1 word| Read received byte        |
-| UART RX Status | 0x8000000C              | 1 word| Bit 0: valid (read clears)|
+| Region           | Address Range           | Size  | Module       | Notes                     |
+|------------------|-------------------------|-------|--------------|---------------------------|
+| IMEM             | 0x00000000 - 0x0000FFFF | 64 KB | `imem.v`     | 16K words, read-only, not on WB bus |
+| DMEM (RAM)       | 0x00010000 - 0x0001FFFF | 64 KB | `wb_dmem.v`  | Byte-addressable, R/W     |
+| UART TX Data     | 0x80000000              | 1 word| `wb_uart.v`  | Write byte to transmit    |
+| UART TX Status   | 0x80000004              | 1 word|              | Bit 0: TX busy            |
+| UART RX Data     | 0x80000008              | 1 word|              | Read received byte        |
+| UART RX Status   | 0x8000000C              | 1 word|              | Bit 0: valid (read clears)|
+| GPIO Output      | 0x80001000              | 1 word| `wb_gpio.v`  | Drives LED[15:0]          |
+| GPIO Input       | 0x80001004              | 1 word|              | Reads SW[15:0]            |
+| Timer mtime_lo   | 0x80002000              | 1 word| `wb_timer.v` | Free-running counter [31:0]  |
+| Timer mtime_hi   | 0x80002004              | 1 word|              | Free-running counter [63:32] |
+| Timer mtimecmp_lo| 0x80002008              | 1 word|              | Comparator [31:0]         |
+| Timer mtimecmp_hi| 0x8000200C              | 1 word|              | Comparator [63:32]        |
 
 ## Directory Structure
 
@@ -64,7 +82,12 @@ The core does **not** contain internal memories — it exposes instruction fetch
 │   ├── immgen.v          # Immediate generator (R/I/S/B/U/J)
 │   ├── imem.v            # Instruction memory (word-addressed)
 │   ├── dmem.v            # Data memory (word-based, byte enables)
-│   ├── bus_decoder.v     # Address decoder (RAM/UART routing)
+│   ├── wb_master.v       # Wishbone master bridge (core → WB)
+│   ├── wb_interconnect.v # Address decoder + return mux
+│   ├── wb_dmem.v         # Data memory WB slave wrapper
+│   ├── wb_uart.v         # UART TX/RX WB slave
+│   ├── wb_gpio.v         # GPIO WB slave (LEDs + switches)
+│   ├── wb_timer.v        # CLINT-style timer WB slave
 │   ├── uart_tx.v         # UART transmitter (8N1)
 │   ├── uart_rx.v         # UART receiver (8N1)
 │   ├── fpga_top.v        # FPGA top-level wrapper
@@ -87,6 +110,9 @@ make sim MOD=alu
 
 # Run full-core integration test
 make sim-top
+
+# Run FPGA top-level UART test (Hello, RISC-V!)
+make sim MOD=fpga_top
 
 # Assemble firmware
 riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
@@ -138,14 +164,14 @@ Note: IMEM and DMEM are currently mapped to distributed RAM (LUT RAM) rather tha
 
 ### Pin Assignments
 
-| Signal       | Pin | Direction | Notes                  |
-|-------------|-----|-----------|------------------------|
-| CLK100MHZ    | E3  | Input     | 100 MHz oscillator     |
-| CPU_RESETN   | C12 | Input     | Active-low reset       |
-| UART_TXD_IN  | C4  | Input     | FTDI TX -> FPGA RX     |
-| UART_RXD_OUT | D4  | Output    | FPGA TX -> FTDI RX     |
-| LED0         | H17 | Output    | UART TX busy           |
-| LED1         | K15 | Output    | UART RX valid          |
+| Signal         | Pin(s)  | Direction | Notes                       |
+|----------------|---------|-----------|------------------------------|
+| CLK100MHZ      | E3      | Input     | 100 MHz oscillator           |
+| CPU_RESETN     | C12     | Input     | Active-low reset             |
+| UART_TXD_IN    | C4      | Input     | FTDI TX -> FPGA RX           |
+| UART_RXD_OUT   | D4      | Output    | FPGA TX -> FTDI RX           |
+| LED[15:0]      | H17...  | Output    | GPIO output register         |
+| SW[15:0]       | J15...  | Input     | GPIO input (slide switches)  |
 
 ## Compliance
 
@@ -162,10 +188,11 @@ srl srli sub sw xor xori
 
 ## Future Work
 
-- Custom accelerator integration (spiking neural network coprocessor)
-- SoC buildout (Wishbone bus, more peripherals)
-- Formal verification (riscv-formal)
+- Formal verification (riscv-formal with RVFI interface)
 - Pipeline (5-stage) for higher clock frequency
+- Wait-state support in `wb_master` for slower peripherals
+- Custom accelerator integration (spiking neural network coprocessor)
+- BRAM inference for IMEM/DMEM
 
 ## License
 
