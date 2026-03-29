@@ -45,7 +45,7 @@ A single-cycle RV32I RISC-V processor implemented in Verilog, targeting the Digi
                        |      |     |      |
                 +------+ +-----+ +-----+ +-------+
                 | DMEM | |UART | |GPIO | |TIMER  |
-                | 64KB | |TX/RX| | LED | |CLINT  |
+                | 4KB  | |TX/RX| | LED | |CLINT  |
                 +------+ +-----+ | SW  | +-------+
                                  +-----+
 ```
@@ -59,7 +59,7 @@ The Wishbone interconnect routes the core's data bus to the correct slave based 
 | Region           | Address Range           | Size  | Module       | Notes                     |
 |------------------|-------------------------|-------|--------------|---------------------------|
 | IMEM             | 0x00000000 - 0x0000FFFF | 64 KB | `imem.v`     | 16K words, read-only, not on WB bus |
-| DMEM (RAM)       | 0x00010000 - 0x0001FFFF | 64 KB | `wb_dmem.v`  | Byte-addressable, R/W     |
+| DMEM (RAM)       | 0x00010000 - 0x00010FFF | 4 KB  | `wb_dmem.v`  | Byte-addressable, R/W     |
 | UART TX Data     | 0x80000000              | 1 word| `wb_uart.v`  | Write byte to transmit    |
 | UART TX Status   | 0x80000004              | 1 word|              | Bit 0: TX busy            |
 | UART RX Data     | 0x80000008              | 1 word|              | Read received byte        |
@@ -146,20 +146,20 @@ Requires Vivado 2023.x+ (free WebPACK edition). See [docs/synth_guide.md](docs/s
 
 **Target:** Nexys4 DDR (Artix-7 XC7A100T)
 **Core clock:** 50 MHz (100 MHz / 2 divider)
-**Timing:** WNS +0.338 ns (met)
+**Timing:** WNS +0.301 ns (met)
 
 ### Resource Utilization
 
 | Resource       | Used  | Available | %      |
 |----------------|-------|-----------|--------|
-| Slice LUTs     | 9,711 | 63,400    | 15.32% |
-| — as Logic     | 1,475 |           | 2.33%  |
-| — as Memory    | 8,236 | 19,000    | 43.35% |
-| Slice FFs      | 114   | 126,800   | 0.09%  |
-| Block RAM      | 0     | 135       | 0.00%  |
+| Slice LUTs     | 1,969 | 63,400    | 3.11%  |
+| — as Logic     | 1,413 |           | 2.23%  |
+| — as Memory    | 556   | 19,000    | 2.93%  |
+| Slice FFs      | 275   | 126,800   | 0.22%  |
+| Block RAM      | 0.5   | 135       | 0.37%  |
 | DSP            | 0     | 240       | 0.00%  |
 
-Note: IMEM and DMEM are currently mapped to distributed RAM (LUT RAM) rather than block RAM. This uses more LUTs but meets timing. A future optimization would restructure the memory interfaces for BRAM inference.
+IMEM uses Block RAM (synchronous read with pc_next pre-fetch). DMEM (4KB) uses distributed RAM (combinational reads required by single-cycle core).
 
 ### Pin Assignments
 

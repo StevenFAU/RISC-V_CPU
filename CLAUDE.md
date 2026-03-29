@@ -81,7 +81,7 @@ For classic single-cycle: `cyc` and `stb` assert together, slave responds with `
 | Region       | Address Range             | Size   | Slave Module        |
 |--------------|---------------------------|--------|---------------------|
 | IMEM         | `0x00000000 – 0x0000FFFF` | 64 KB  | `imem.v` (not on WB)|
-| DMEM (RAM)   | `0x00010000 – 0x0001FFFF` | 64 KB  | `wb_dmem.v`         |
+| DMEM (RAM)   | `0x00010000 – 0x00010FFF` | 4 KB   | `wb_dmem.v`         |
 | UART         | `0x80000000 – 0x8000000F` | 16 B   | `wb_uart.v`         |
 | GPIO         | `0x80001000 – 0x80001007` | 8 B    | `wb_gpio.v`         |
 | TIMER (CLINT)| `0x80002000 – 0x8000200F` | 16 B   | `wb_timer.v`        |

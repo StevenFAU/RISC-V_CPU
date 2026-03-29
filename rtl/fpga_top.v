@@ -4,7 +4,7 @@
 
 module fpga_top #(
     parameter IMEM_DEPTH    = 16384,        // 64KB instruction memory (16K words)
-    parameter DMEM_DEPTH    = 65536,        // 64KB data memory (bytes)
+    parameter DMEM_DEPTH    = 4096,         // 4KB data memory (bytes)
     parameter IMEM_INIT     = "firmware.hex",
     parameter DMEM_INIT     = "dmem_init.hex",
     parameter CLK_FREQ      = 50_000_000,   // Core runs at 50MHz (100MHz / 2)
