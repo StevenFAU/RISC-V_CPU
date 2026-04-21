@@ -78,6 +78,8 @@ For classic single-cycle: `cyc` and `stb` assert together, slave responds with `
 
 **Known Limitation:** The current `wb_master.v` is zero-wait-state only. It accepts `wb_ack_i` for port compliance but does not use it to gate read data or stall the core. All slaves must return combinational ack. Future peripherals with latency (external SRAM, SPI flash, PCIe) will require upgrading `wb_master` to feed a stall/ready signal back into `rv32i_core`.
 
+> **Partially addressed in Phase 0.1 (2026-04-21):** a simulation-only assertion in `wb_master.v` now catches the bug class (any cycle where `cyc & stb & !ack` with `WB_USE_STALL == 0` triggers `$error`), and an optional `stall_o` output — enabled by the `WB_USE_STALL` parameter — exposes `(cyc & stb & !ack)` for a future pipelined core to consume. Nothing in `rv32i_core` currently reads `stall_o`; full integration is deferred to Phase 4 of [`TIER1_ROADMAP.md`](../TIER1_ROADMAP.md).
+
 ### New Address Map
 
 | Region       | Address Range             | Size   | Slave Module        |

@@ -1,16 +1,39 @@
-// Wishbone B4 Master Bridge — Zero-Wait-State
+// Wishbone B4 Master Bridge — Zero-Wait-State (Phase 0.1 hardened)
 // Translates rv32i_core dmem bus signals to Wishbone B4 classic interface.
 // Generates wb_sel from funct3 + addr[1:0] per RISC-V load/store encoding.
 //
-// LIMITATION: This bridge assumes all slaves return ack and read data
-// combinationally in the same cycle (zero wait states). wb_ack_i is
-// accepted as a port for Wishbone compliance but is not used to gate
-// dmem_rdata or stall the core. Adding wait-state support requires a
-// stall/ready signal back into rv32i_core (not yet implemented).
-// Any future slave with non-zero latency will need this bridge upgraded.
+// LIMITATION (unchanged): This bridge assumes all slaves return ack and read
+// data combinationally in the same cycle (zero wait states). wb_ack_i is
+// accepted as a port for Wishbone compliance but is not yet propagated as a
+// stall/ready into rv32i_core. Any future slave with non-zero latency will
+// silently corrupt reads unless the pipeline consumes a stall.
+//
+// Phase 0.1 partial mitigation:
+//   - Simulation-only assertion on every negedge clk fires if (cyc & stb &
+//     !ack) is sampled while WB_USE_STALL == 0. This catches the class of
+//     bug — a slave that fails to ack combinationally — before silicon.
+//   - Optional stall_o output: when WB_USE_STALL is set to 1 at elaboration,
+//     stall_o = (cyc & stb & !ack) so a future core can stall on it. Default
+//     (WB_USE_STALL = 0) ties stall_o to 0 and preserves original behavior.
+//     Nothing currently consumes this wire; it exists so Phase 4's pipeline
+//     refactor can flip the parameter and wire stall_o into the core without
+//     a port-list change.
+//
+// The full fix (true wait-state support end-to-end through rv32i_core) is
+// deferred to Phase 4 of the Tier 1 roadmap.
 `include "defines.v"
 
-module wb_master (
+module wb_master #(
+    // When 1, stall_o = cyc & stb & !ack (intended for pipelined cores).
+    // When 0, stall_o is tied to 0 and a simulation assertion fires if the
+    // master ever sees cyc & stb & !ack — the bug this parameter guards.
+    parameter WB_USE_STALL = 0
+) (
+    // Clock — used only for the simulation-only assertion below. Synthesis
+    // tools drop the always @(negedge clk) block inside the `ifndef SYNTHESIS
+    // guard, so no real register is inferred.
+    input  wire        clk,
+
     // Core data memory bus (from rv32i_core)
     input  wire [31:0] dmem_addr,
     input  wire [31:0] dmem_wdata,
@@ -30,7 +53,10 @@ module wb_master (
     input  wire        wb_ack_i,
 
     // Sideband — pass funct3 through for slaves that need sign-extension info
-    output wire [2:0]  wb_funct3_o
+    output wire [2:0]  wb_funct3_o,
+
+    // Optional stall output — Phase 4 hook. Tied 0 when WB_USE_STALL == 0.
+    output wire        stall_o
 );
 
     // =========================================================================
@@ -80,5 +106,34 @@ module wb_master (
     end
 
     assign wb_sel_o = sel;
+
+    // =========================================================================
+    // Optional stall output (Phase 4 hook)
+    // =========================================================================
+    generate
+        if (WB_USE_STALL) begin : g_stall_live
+            assign stall_o = wb_cyc_o & wb_stb_o & ~wb_ack_i;
+        end else begin : g_stall_tied
+            assign stall_o = 1'b0;
+        end
+    endgenerate
+
+    // =========================================================================
+    // Simulation-only assertion: catches the "silently ignored wb_ack_i" bug.
+    // Synthesis tools dropping this block leave behavior unchanged in silicon.
+    // =========================================================================
+`ifndef SYNTHESIS
+    always @(negedge clk) begin
+        if (WB_USE_STALL == 0 && wb_cyc_o === 1'b1
+                               && wb_stb_o === 1'b1
+                               && wb_ack_i !== 1'b1) begin
+            $display("[%0t] wb_master ASSERT: cyc&stb asserted with wb_ack_i=%b (addr=0x%08h we=%b). A slave failed to ack combinationally; this would corrupt reads in silicon. Set WB_USE_STALL=1 and consume stall_o, or fix the slave.",
+                     $time, wb_ack_i, wb_adr_o, wb_we_o);
+            // $error prints "ERROR" to the transcript but does not halt
+            // iverilog simulation — matches the "log, don't halt" intent.
+            $error("wb_master: missing wb_ack_i while cyc&stb asserted (WB_USE_STALL=0)");
+        end
+    end
+`endif
 
 endmodule

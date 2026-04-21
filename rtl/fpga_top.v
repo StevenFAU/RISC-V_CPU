@@ -115,14 +115,18 @@ module fpga_top #(
     // =========================================================================
     // Wishbone Master Bridge
     // =========================================================================
+    // WB_USE_STALL left at its default (0). Phase 4 flips this parameter
+    // and wires stall_o into the pipelined core.
     wb_master u_wb_master (
+        .clk(clk),
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_we(dmem_we), .dmem_re(dmem_re),
         .dmem_funct3(dmem_funct3), .dmem_rdata(dmem_rdata),
         .wb_cyc_o(wb_cyc), .wb_stb_o(wb_stb), .wb_we_o(wb_we),
         .wb_adr_o(wb_adr), .wb_dat_o(wb_dat_m2s), .wb_sel_o(wb_sel),
         .wb_dat_i(wb_dat_s2m), .wb_ack_i(wb_ack),
-        .wb_funct3_o(wb_funct3)
+        .wb_funct3_o(wb_funct3),
+        .stall_o(/* unconnected — reserved for Phase 4 pipeline */)
     );
 
     // =========================================================================
