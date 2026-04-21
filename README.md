@@ -126,6 +126,10 @@ make asm PROG=test_basic
 
 ### Compliance Tests
 
+> **Note:** Hand-written programs (`sw/*.S`) and compliance tests use
+> different linker scripts targeting different memory models. See the
+> comment block at the top of `tb/tb_compliance.v` for details.
+
 The compliance tests require the [riscv-tests](https://github.com/riscv-software-src/riscv-tests) repo. To set up:
 
 ```bash

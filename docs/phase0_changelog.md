@@ -4,6 +4,14 @@ Running log of fixes/changes landed during Phase 0 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
 ## 2026-04-21
+- [docs] Testbench vs hardware memory-map split documented; compliance baseline refreshed
+  - `tb/tb_compliance.v`: added a header comment block explaining that the unified 16 KB memory model differs from the synthesized hardware map (IMEM at 0x0, DMEM at 0x10000). Pointed readers at `sw/link.ld` vs `tests/link.ld` as the source of the split.
+  - `sw/link.ld`: header clarifies this script targets the SYNTHESIZED hardware and is used by `make asm`. Programs built with it run on FPGA / `make sim-fpga` but NOT on the compliance testbench.
+  - `tests/link.ld`: header clarifies this script targets the compliance testbench's unified 16 KB memory. Documents the latent `.text`/`.tohost` overlap: in practice `.text` is empty across all rv32ui tests (verified via objdump: `.text.init` → ALIGN(0x1000) → empty `.text` → `.tohost` at 0x1000), so nothing collides today. Flagged for any future test that adds real `.text` content.
+  - `README.md`: added a one-line cross-reference in the Compliance Tests section pointing at the `tb_compliance.v` comment.
+  - `docs/compliance_results.md`: refreshed all 37 cycle counts to reflect post-Phase-0.1 state. Every test is uniformly +1 vs the 0ea6dc1 baseline; the shift comes from commit 111e557's `wb_timer` reset-value change (both `mtime` and `mtimecmp` now reset to all-1s). Annotation explains the cause so future-readers don't have to bisect.
+  - No RTL changed. Compliance 37/37 identical to the post-bug-#4 state (add=459, lb=247, jal=49).
+  - Closes the Phase 0.1 bug list (5/5).
 - [bug] `wb_interconnect`: added `bus_error_o` output; unmapped cycles now ack with zero data
   - Active cycles (`cyc & stb`) to an unmapped address auto-ack with `wbm_dat_o = 0`. Previously the master hung waiting for an ack no slave would produce — fine today because `WB_USE_STALL=0` discards stall_o, but a deadlock once Phase 4 wires the stall into the pipeline.
   - `bus_error_o` is combinational, asserted the same cycle as the bad access. Must stay combinational so the Phase 1 trap can fire on the same cycle the core sees the (zero-valued) rdata.

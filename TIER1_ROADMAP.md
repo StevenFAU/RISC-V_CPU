@@ -59,7 +59,7 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 - `wb_timer`: fix the write/increment race by gating the increment when a write to `mtime_lo/hi` is in flight. Add an explicit enable bit or require `mtimecmp != 0` for IRQ assertion, so the default doesn't silently guarantee safety.
 - ~~`wb_interconnect`: decide behavior for unmapped addresses. Options: (a) return 0 with ack, (b) raise a bus-error line that a future trap path consumes. Recommend (b) with the line landing on the floor for now — the wire exists, Phase 1 uses it for the load/store access fault trap.~~ Done — combined (a)+(b): unmapped active cycles auto-ack with zero rdata AND raise combinational `bus_error_o`. Auto-ack prevents deadlock once Phase 4 wires stall through; `bus_error_o` is unconnected at `fpga_top` awaiting the Phase 1 trap. See `docs/phase0_changelog.md`.
 - `wb_gpio`: tighten address decode to the actual register range, or update docs to match the decode.
-- `tb_compliance.v` vs linker script address discrepancy: document the split. Not a bug, but worth a one-paragraph comment.
+- ~~`tb_compliance.v` vs linker script address discrepancy: document the split. Not a bug, but worth a one-paragraph comment.~~ Done — memory-model comment block added to `tb/tb_compliance.v`; headers added to both `sw/link.ld` and `tests/link.ld` explaining which script targets which memory model; README cross-references the testbench comment; `docs/compliance_results.md` refreshed with post-Phase-0.1 cycle counts. See `docs/phase0_changelog.md`.
 
 ### 0.2 C Toolchain + Minimal Runtime
 - Crt0 (`sw/crt0.S`): zero bss, set up sp, jump to `main`.

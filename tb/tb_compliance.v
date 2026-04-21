@@ -1,6 +1,31 @@
 // Compliance Testbench for RV32I Core
 // Unified byte-addressed memory connected via core's external bus ports.
 // Monitors writes to tohost (0x1000) for pass/fail.
+//
+// =========================================================================
+// MEMORY MODEL — important context for readers
+// =========================================================================
+// This testbench models a unified 16 KB byte-addressed memory starting at
+// address 0x00000000. Both instruction fetch and data access go through
+// this single array (`mem[0..16383]`).
+//
+// This is DIFFERENT from the synthesized hardware memory map, which has
+// IMEM at 0x00000000 and DMEM at 0x00010000 (see `sw/link.ld`).
+//
+// Compliance tests use a separate linker script (`tests/link.ld`) that
+// places all sections within the 16 KB testbench window:
+//   .text.init at 0x00000000
+//   .tohost    at 0x00001000
+//   .data      at 0x00002000
+//
+// The testbench works because compliance tests are linked for the
+// testbench layout, not the hardware layout. Hand-written programs in
+// `sw/` use `sw/link.ld` and target the hardware layout instead — they
+// are NOT compatible with this testbench.
+//
+// If you're debugging "why does my test program silently read zeros,"
+// check which linker script your program was built with.
+// =========================================================================
 `timescale 1ns/1ps
 
 module tb_compliance;
@@ -10,6 +35,8 @@ module tb_compliance;
     // =========================================================================
     // Unified memory — 16 KB byte-addressed
     // =========================================================================
+    // MEM_SIZE must match the upper bound assumed by tests/link.ld.
+    // Currently 16 KB — resizing here means touching the linker script too.
     parameter MEM_SIZE   = 16384;
     parameter TOHOST_ADDR = 32'h00001000;
     parameter MAX_CYCLES  = 10000;
