@@ -64,11 +64,22 @@ module wb_interconnect (
 
     // =========================================================================
     // Address decode
+    //
+    // Phase 0.1 (2026-04-21): UART/GPIO/TIMER tightened to exactly match the
+    // documented register windows. Previously these were all decoded as 4 KB
+    // regions (addr[31:12] == page), which silently aliased every mismatched
+    // address inside the page back onto the real registers. Out-of-range
+    // accesses now fall through to the unmapped path (return 0, no ack).
+    //
+    // DMEM stays broad (16-bit match on addr[31:16] covers 64 KB) on purpose
+    // — it's a memory region, not a register block, and future sizing changes
+    // (8 KB, 16 KB, etc.) should live inside this window without touching the
+    // interconnect.
     // =========================================================================
-    wire sel_dmem = (wbm_adr_i[31:16] == 16'h0001);
-    wire sel_uart = (wbm_adr_i[31:12] == 20'h80000);
-    wire sel_gpio = (wbm_adr_i[31:12] == 20'h80001);
-    wire sel_timer = (wbm_adr_i[31:12] == 20'h80002);
+    wire sel_dmem  = (wbm_adr_i[31:16] == 16'h0001);
+    wire sel_uart  = (wbm_adr_i >= 32'h8000_0000) && (wbm_adr_i <= 32'h8000_000F);
+    wire sel_gpio  = (wbm_adr_i >= 32'h8000_1000) && (wbm_adr_i <= 32'h8000_1007);
+    wire sel_timer = (wbm_adr_i >= 32'h8000_2000) && (wbm_adr_i <= 32'h8000_200F);
 
     // =========================================================================
     // Slave 0: DMEM — steering
