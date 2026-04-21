@@ -1,3 +1,5 @@
+> **Archived — Phase 1 complete.** This document is the planning record for the Wishbone B4 bus integration phase, completed 2026-04-21. The four-slave fabric (DMEM, UART, GPIO, timer) is implemented, FPGA-verified, and tagged. Superseded by [`TIER1_ROADMAP.md`](../TIER1_ROADMAP.md) as the active planning document.
+
 # CLAUDE.md — Wishbone Bus Integration
 
 ## Project Overview
