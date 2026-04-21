@@ -25,8 +25,8 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 ### Known Limitations (carried into this phase)
 - `wb_master` is zero-wait-state only. `wb_ack_i` is ignored; any non-combinational slave silently corrupts reads. (Fixed in Phase 0/4.)
 - `timer_irq` is exposed but dangling — the core has no way to receive it. (Fixed in Phase 2.)
-- Write/increment race in `wb_timer` (cosmetic). (Fixed in Phase 0.)
-- `mtime` resets to 0 with `mtimecmp` at max — correct only because of defaults, fragile. (Fixed in Phase 0.)
+- Write/increment race in `wb_timer` (cosmetic). (Fixed in Phase 0.1 — see `docs/phase0_changelog.md`.)
+- `mtime` resets to 0 with `mtimecmp` at max — correct only because of defaults, fragile. (Fixed in Phase 0.1 — both now reset to all-1s; see `docs/phase0_changelog.md`.)
 - Compliance testbench's memory map differs from synthesized memory map. Works, but worth noting.
 - No CI. No Verilator lint. No C toolchain / libc. Every program is hand-written assembly.
 

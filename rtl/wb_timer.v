@@ -9,6 +9,25 @@
 //   +0xC: mtimecmp_hi (R/W)
 //
 // Immediate combinational ack.
+//
+// Phase 0.1 hardened (2026-04-21):
+//   * Write/increment semantics: a write to mtime_lo or mtime_hi replaces
+//     that half and skips the increment for that cycle. The unwritten half
+//     is preserved as-is (no carry injected). Simultaneous writes to both
+//     halves are not supported by the bus (one 32-bit transaction per
+//     cycle), so no carry ambiguity arises. Writes to mtimecmp_lo/hi never
+//     affect the mtime increment path.
+//   * Reset values: both mtime and mtimecmp reset to 64'hFFFFFFFF_FFFFFFFF.
+//     Rationale: the comparator timer_irq = (mtime >= mtimecmp) must be
+//     well-defined at reset without relying on the mtimecmp default being
+//     larger than mtime. With both at all-1s, the comparator is true for
+//     exactly one cycle before the first increment wraps mtime to 0; real
+//     software writes mtimecmp before enabling mstatus.MIE, so this is
+//     benign. The previous scheme (mtime=0, mtimecmp=all-1s) was fragile
+//     — any future change to mtimecmp's default would have spuriously
+//     asserted timer_irq at startup.
+//   * Reset style: synchronous active-high reset, matching `pc.v`,
+//     `wb_dmem.v`, and the 2-FF reset synchronizer in `fpga_top.v`.
 
 module wb_timer (
     input  wire        clk,
@@ -46,21 +65,36 @@ module wb_timer (
     reg [63:0] mtimecmp;
 
     // =========================================================================
-    // Free-running counter + register writes
+    // Next-state logic for mtime
+    //   - Write to mtime_lo: replace low half, preserve high, skip tick
+    //   - Write to mtime_hi: replace high half, preserve low, skip tick
+    //   - Otherwise:         free-running increment
     // =========================================================================
-    always @(posedge clk or posedge rst) begin
-        if (rst) begin
-            mtime    <= 64'd0;
-            mtimecmp <= 64'hFFFFFFFF_FFFFFFFF;  // Default: IRQ disabled (max compare)
-        end else begin
-            // Free-running increment
-            mtime <= mtime + 64'd1;
+    wire write_mtime_lo = valid && wb_we_i && (reg_sel == 4'h0);
+    wire write_mtime_hi = valid && wb_we_i && (reg_sel == 4'h4);
 
-            // Register writes override counter
+    reg [63:0] mtime_next;
+    always @(*) begin
+        if (write_mtime_lo)
+            mtime_next = {mtime[63:32], wb_dat_i};
+        else if (write_mtime_hi)
+            mtime_next = {wb_dat_i, mtime[31:0]};
+        else
+            mtime_next = mtime + 64'd1;
+    end
+
+    // =========================================================================
+    // Register update — synchronous active-high reset
+    // =========================================================================
+    always @(posedge clk) begin
+        if (rst) begin
+            mtime    <= 64'hFFFFFFFF_FFFFFFFF;
+            mtimecmp <= 64'hFFFFFFFF_FFFFFFFF;
+        end else begin
+            mtime <= mtime_next;
+
             if (valid && wb_we_i) begin
                 case (reg_sel)
-                    4'h0: mtime[31:0]     <= wb_dat_i;
-                    4'h4: mtime[63:32]    <= wb_dat_i;
                     4'h8: mtimecmp[31:0]  <= wb_dat_i;
                     4'hC: mtimecmp[63:32] <= wb_dat_i;
                     default: ;
