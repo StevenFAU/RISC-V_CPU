@@ -153,7 +153,9 @@ module fpga_top #(
         // Slave 3: Timer
         .wbs3_cyc_o(wbs3_cyc), .wbs3_stb_o(wbs3_stb), .wbs3_we_o(wbs3_we),
         .wbs3_adr_o(wbs3_adr), .wbs3_dat_o(wbs3_dat_m2s), .wbs3_sel_o(wbs3_sel),
-        .wbs3_dat_i(wbs3_dat_s2m), .wbs3_ack_i(wbs3_ack)
+        .wbs3_dat_i(wbs3_dat_s2m), .wbs3_ack_i(wbs3_ack),
+        // bus_error_o unconnected — consumed by access-fault trap in Phase 1
+        .bus_error_o(/* unconnected */)
     );
 
     // =========================================================================

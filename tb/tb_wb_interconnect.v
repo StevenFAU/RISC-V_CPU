@@ -1,10 +1,14 @@
 // Testbench — wb_interconnect
 // Verifies address decode steers to correct slave and muxes responses.
 //
-// Phase 0.1 (2026-04-21): tests 8–12 added to cover the tightened UART/GPIO/
-// TIMER decodes. Out-of-range peripheral-window accesses must fall through
-// to the unmapped path (no slave cyc, no ack). In-range boundary accesses
-// for GPIO and TIMER are exercised to confirm the new windows are correct.
+// Phase 0.1 (2026-04-21) history:
+//   * Tests 8–12 added for the tightened UART/GPIO/TIMER decodes.
+//   * Test 3 re-stated and Tests 13–17 added for the new unmapped-access
+//     policy: an active cycle to an unmapped address auto-acks with
+//     wbm_dat_o=0 and asserts combinational bus_error_o. Idle cycles stay
+//     quiescent. This prevents bus hangs once Phase 4 wires the master
+//     stall through to the pipeline, and hands Phase 1 a clean signal to
+//     hang the load/store access-fault trap off of.
 `timescale 1ns / 1ps
 
 module tb_wb_interconnect;
@@ -14,6 +18,7 @@ module tb_wb_interconnect;
     reg  [3:0]  wbm_sel;
     wire [31:0] wbm_dat_o;
     wire        wbm_ack_o;
+    wire        bus_error;
     reg  [2:0]  wbm_funct3;
 
     // Slave 0 (DMEM)
@@ -68,7 +73,8 @@ module tb_wb_interconnect;
         // Slave 3
         .wbs3_cyc_o(wbs3_cyc), .wbs3_stb_o(wbs3_stb), .wbs3_we_o(wbs3_we),
         .wbs3_adr_o(wbs3_adr), .wbs3_dat_o(wbs3_dat), .wbs3_sel_o(wbs3_sel),
-        .wbs3_dat_i(wbs3_dat_i), .wbs3_ack_i(wbs3_ack_i)
+        .wbs3_dat_i(wbs3_dat_i), .wbs3_ack_i(wbs3_ack_i),
+        .bus_error_o(bus_error)
     );
 
     initial begin
@@ -86,7 +92,8 @@ module tb_wb_interconnect;
         wbs0_dat_i = 32'hBEEF_CAFE; wbs0_ack_i = 1;
         wbs1_dat_i = 32'h0; wbs1_ack_i = 0;
         #1;
-        if (wbs0_cyc === 1 && wbs1_cyc === 0 && wbm_dat_o === 32'hBEEF_CAFE && wbm_ack_o === 1) begin
+        if (wbs0_cyc === 1 && wbs1_cyc === 0 && wbm_dat_o === 32'hBEEF_CAFE
+                && wbm_ack_o === 1 && bus_error === 1'b0) begin
             $display("PASS: DMEM addr selects slave 0"); pass = pass + 1;
         end else begin
             $display("FAIL: DMEM addr"); fail = fail + 1;
@@ -97,21 +104,29 @@ module tb_wb_interconnect;
         wbs0_dat_i = 32'h0; wbs0_ack_i = 0;
         wbs1_dat_i = 32'h0000_0001; wbs1_ack_i = 1;
         #1;
-        if (wbs1_cyc === 1 && wbs0_cyc === 0 && wbm_dat_o === 32'h0000_0001 && wbm_ack_o === 1) begin
+        if (wbs1_cyc === 1 && wbs0_cyc === 0 && wbm_dat_o === 32'h0000_0001
+                && wbm_ack_o === 1 && bus_error === 1'b0) begin
             $display("PASS: UART addr selects slave 1"); pass = pass + 1;
         end else begin
-            $display("FAIL: UART addr — s1_cyc=%b s0_cyc=%b dat=%h ack=%b",
-                     wbs1_cyc, wbs0_cyc, wbm_dat_o, wbm_ack_o); fail = fail + 1;
+            $display("FAIL: UART addr — s1_cyc=%b s0_cyc=%b dat=%h ack=%b be=%b",
+                     wbs1_cyc, wbs0_cyc, wbm_dat_o, wbm_ack_o, bus_error); fail = fail + 1;
         end
 
-        // === Test 3: Unmapped address — no slave selected ===
+        // === Test 3: Unmapped addr — acks with bus_error ===
+        // Phase 0.1 behavior change: previously no-ack, no-dat. Now auto-acks
+        // with zero rdata and raises bus_error_o combinationally. This is the
+        // hook for the Phase 1 load/store access-fault trap.
         wbm_adr = 32'h0002_0000;
         wbs0_ack_i = 1; wbs1_ack_i = 1;
         #1;
-        if (wbs0_cyc === 0 && wbs1_cyc === 0 && wbm_ack_o === 0 && wbm_dat_o === 32'd0) begin
-            $display("PASS: Unmapped addr — no slave, no ack"); pass = pass + 1;
+        if (wbs0_cyc === 0 && wbs1_cyc === 0
+                && wbm_ack_o === 1'b1
+                && wbm_dat_o === 32'd0
+                && bus_error === 1'b1) begin
+            $display("PASS: Unmapped addr — acks with bus_error"); pass = pass + 1;
         end else begin
-            $display("FAIL: Unmapped addr"); fail = fail + 1;
+            $display("FAIL: Unmapped addr — s0_cyc=%b s1_cyc=%b ack=%b dat=%h be=%b",
+                     wbs0_cyc, wbs1_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
         end
 
         // === Test 4: Write enable passthrough ===
@@ -151,87 +166,188 @@ module tb_wb_interconnect;
         end
 
         // =====================================================================
-        // Phase 0.1 new tests (8–12) — tightened UART/GPIO/TIMER decodes
+        // Phase 0.1 new tests (8–17) — tightened decodes + bus_error policy
         // =====================================================================
 
         // Common state for fall-through tests: all slaves ack-high so we can
-        // prove the interconnect is the thing gating cyc/ack, not the slave.
+        // prove the interconnect is the thing gating cyc, not the slave.
         wbs0_ack_i = 1; wbs1_ack_i = 1; wbs2_ack_i = 1; wbs3_ack_i = 1;
         wbm_we = 0; wbm_sel = 4'b1111;
 
-        // === Test 8: UART out-of-range access falls through ===
+        // === Test 8: UART out-of-range access falls through (bus_error) ===
         // 0x80000010 was inside the old 4 KB UART page; the new decode stops
-        // at 0x8000000F. Must now land in the unmapped path.
+        // at 0x8000000F. The new unmapped policy auto-acks AND raises
+        // bus_error_o — the slave still does not see cyc asserted.
         wbm_adr = 32'h8000_0010;
         #1;
-        if (wbs1_cyc === 0 && wbm_ack_o === 0 && wbm_dat_o === 32'd0) begin
-            $display("PASS: UART out-of-range (0x80000010) -> unmapped"); pass = pass + 1;
+        if (wbs1_cyc === 0 && wbm_ack_o === 1'b1
+                && wbm_dat_o === 32'd0
+                && bus_error === 1'b1) begin
+            $display("PASS: UART out-of-range (0x80000010) -> bus_error+ack");
+            pass = pass + 1;
         end else begin
-            $display("FAIL: UART out-of-range still hits slave — s1_cyc=%b ack=%b dat=%h",
-                     wbs1_cyc, wbm_ack_o, wbm_dat_o); fail = fail + 1;
+            $display("FAIL: UART out-of-range — s1_cyc=%b ack=%b dat=%h be=%b",
+                     wbs1_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
         end
 
-        // === Test 9: GPIO out-of-range access falls through ===
+        // === Test 9: GPIO out-of-range access falls through (bus_error) ===
         // 0x80001008 was inside the old 4 KB GPIO page; new decode stops at
         // 0x80001007 (2 registers).
         wbm_adr = 32'h8000_1008;
         #1;
-        if (wbs2_cyc === 0 && wbm_ack_o === 0 && wbm_dat_o === 32'd0) begin
-            $display("PASS: GPIO out-of-range (0x80001008) -> unmapped"); pass = pass + 1;
+        if (wbs2_cyc === 0 && wbm_ack_o === 1'b1
+                && wbm_dat_o === 32'd0
+                && bus_error === 1'b1) begin
+            $display("PASS: GPIO out-of-range (0x80001008) -> bus_error+ack");
+            pass = pass + 1;
         end else begin
-            $display("FAIL: GPIO out-of-range still hits slave — s2_cyc=%b ack=%b dat=%h",
-                     wbs2_cyc, wbm_ack_o, wbm_dat_o); fail = fail + 1;
+            $display("FAIL: GPIO out-of-range — s2_cyc=%b ack=%b dat=%h be=%b",
+                     wbs2_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
         end
 
         // === Test 10: GPIO in-range boundaries still hit slave ===
         wbs2_dat_i = 32'hAAAA_5555;
         wbm_adr = 32'h8000_1000;
         #1;
-        if (wbs2_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hAAAA_5555) begin
+        if (wbs2_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hAAAA_5555
+                && bus_error === 1'b0) begin
             $display("PASS: GPIO in-range low  (0x80001000) -> slave 2"); pass = pass + 1;
         end else begin
-            $display("FAIL: GPIO in-range low — s2_cyc=%b ack=%b dat=%h",
-                     wbs2_cyc, wbm_ack_o, wbm_dat_o); fail = fail + 1;
+            $display("FAIL: GPIO in-range low — s2_cyc=%b ack=%b dat=%h be=%b",
+                     wbs2_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
         end
         wbm_adr = 32'h8000_1004;
         #1;
-        if (wbs2_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hAAAA_5555) begin
+        if (wbs2_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hAAAA_5555
+                && bus_error === 1'b0) begin
             $display("PASS: GPIO in-range high (0x80001004) -> slave 2"); pass = pass + 1;
         end else begin
-            $display("FAIL: GPIO in-range high — s2_cyc=%b ack=%b dat=%h",
-                     wbs2_cyc, wbm_ack_o, wbm_dat_o); fail = fail + 1;
+            $display("FAIL: GPIO in-range high — s2_cyc=%b ack=%b dat=%h be=%b",
+                     wbs2_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
         end
 
-        // === Test 11: Timer out-of-range access falls through ===
+        // === Test 11: Timer out-of-range access falls through (bus_error) ===
         // 0x80002010 was inside the old 4 KB timer page; new decode stops at
         // 0x8000200F (4 registers).
         wbs2_dat_i = 32'd0;
         wbm_adr = 32'h8000_2010;
         #1;
-        if (wbs3_cyc === 0 && wbm_ack_o === 0 && wbm_dat_o === 32'd0) begin
-            $display("PASS: TIMER out-of-range (0x80002010) -> unmapped"); pass = pass + 1;
+        if (wbs3_cyc === 0 && wbm_ack_o === 1'b1
+                && wbm_dat_o === 32'd0
+                && bus_error === 1'b1) begin
+            $display("PASS: TIMER out-of-range (0x80002010) -> bus_error+ack");
+            pass = pass + 1;
         end else begin
-            $display("FAIL: TIMER out-of-range still hits slave — s3_cyc=%b ack=%b dat=%h",
-                     wbs3_cyc, wbm_ack_o, wbm_dat_o); fail = fail + 1;
+            $display("FAIL: TIMER out-of-range — s3_cyc=%b ack=%b dat=%h be=%b",
+                     wbs3_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
         end
 
         // === Test 12: Timer in-range boundaries still hit slave ===
         wbs3_dat_i = 32'hF00D_1234;
         wbm_adr = 32'h8000_2000;
         #1;
-        if (wbs3_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hF00D_1234) begin
+        if (wbs3_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hF00D_1234
+                && bus_error === 1'b0) begin
             $display("PASS: TIMER in-range low  (0x80002000) -> slave 3"); pass = pass + 1;
         end else begin
-            $display("FAIL: TIMER in-range low — s3_cyc=%b ack=%b dat=%h",
-                     wbs3_cyc, wbm_ack_o, wbm_dat_o); fail = fail + 1;
+            $display("FAIL: TIMER in-range low — s3_cyc=%b ack=%b dat=%h be=%b",
+                     wbs3_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
         end
         wbm_adr = 32'h8000_200C;
         #1;
-        if (wbs3_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hF00D_1234) begin
+        if (wbs3_cyc === 1 && wbm_ack_o === 1 && wbm_dat_o === 32'hF00D_1234
+                && bus_error === 1'b0) begin
             $display("PASS: TIMER in-range high (0x8000200C) -> slave 3"); pass = pass + 1;
         end else begin
-            $display("FAIL: TIMER in-range high — s3_cyc=%b ack=%b dat=%h",
-                     wbs3_cyc, wbm_ack_o, wbm_dat_o); fail = fail + 1;
+            $display("FAIL: TIMER in-range high — s3_cyc=%b ack=%b dat=%h be=%b",
+                     wbs3_cyc, wbm_ack_o, wbm_dat_o, bus_error); fail = fail + 1;
+        end
+
+        // === Test 13: Mapped DMEM access does not raise bus_error ===
+        wbs0_dat_i = 32'h1234_5678;
+        wbm_adr = 32'h0001_0100;
+        #1;
+        if (bus_error === 1'b0 && wbs0_cyc === 1'b1 && wbm_ack_o === 1'b1) begin
+            $display("PASS: mapped DMEM access — bus_error=0"); pass = pass + 1;
+        end else begin
+            $display("FAIL: mapped DMEM — be=%b s0_cyc=%b ack=%b",
+                     bus_error, wbs0_cyc, wbm_ack_o); fail = fail + 1;
+        end
+
+        // === Test 14: Mapped UART access does not raise bus_error ===
+        wbs1_dat_i = 32'h8765_4321;
+        wbm_adr = 32'h8000_0004;
+        #1;
+        if (bus_error === 1'b0 && wbs1_cyc === 1'b1 && wbm_ack_o === 1'b1) begin
+            $display("PASS: mapped UART access — bus_error=0"); pass = pass + 1;
+        end else begin
+            $display("FAIL: mapped UART — be=%b s1_cyc=%b ack=%b",
+                     bus_error, wbs1_cyc, wbm_ack_o); fail = fail + 1;
+        end
+
+        // === Test 15: Idle cycle — no bus_error, no ack ===
+        // Drive an unmapped address on the bus with cyc=stb=0. The
+        // interconnect must treat this as idle: no bus_error, no ack.
+        // This guards against the naive bug where bus_error is derived
+        // from just "no slave matched" without the cyc&stb gate.
+        wbm_cyc = 0; wbm_stb = 0;
+        wbm_adr = 32'h0002_0000;
+        #1;
+        if (bus_error === 1'b0 && wbm_ack_o === 1'b0) begin
+            $display("PASS: idle cycle — no bus_error, no ack"); pass = pass + 1;
+        end else begin
+            $display("FAIL: idle cycle — be=%b ack=%b (expected 0,0)",
+                     bus_error, wbm_ack_o); fail = fail + 1;
+        end
+
+        // === Test 16: Out-of-range-within-peripheral raises bus_error ===
+        // Exercises the interaction with bug #3's tightened UART decode:
+        // 0x80000010 sits inside the old 4 KB UART page but past the new
+        // 16-byte register window. bus_error_o MUST assert; wbm_ack_o=1;
+        // no slave sees cyc asserted.
+        wbm_cyc = 1; wbm_stb = 1; wbm_we = 0;
+        wbm_adr = 32'h8000_0010;
+        #1;
+        if (bus_error === 1'b1 && wbm_ack_o === 1'b1
+                && wbs0_cyc === 1'b0 && wbs1_cyc === 1'b0
+                && wbs2_cyc === 1'b0 && wbs3_cyc === 1'b0) begin
+            $display("PASS: out-of-range peripheral (UART+0x10) -> bus_error");
+            pass = pass + 1;
+        end else begin
+            $display("FAIL: out-of-range peripheral — be=%b ack=%b cycs=%b%b%b%b",
+                     bus_error, wbm_ack_o, wbs0_cyc, wbs1_cyc, wbs2_cyc, wbs3_cyc);
+            fail = fail + 1;
+        end
+
+        // === Test 17: bus_error is combinational (same-cycle tracking) ===
+        // Transition the address from a mapped (DMEM) value to an unmapped
+        // value with no intervening clock edge. bus_error_o must flip in
+        // the same delta cycle — protects against someone registering it
+        // and breaking the Phase 1 trap semantics.
+        wbm_cyc = 1; wbm_stb = 1;
+        wbm_adr = 32'h0001_0100;   // mapped (DMEM)
+        #1;
+        if (bus_error !== 1'b0) begin
+            $display("FAIL: pre-transition bus_error=%b (expected 0)", bus_error);
+            fail = fail + 1;
+        end
+        wbm_adr = 32'h4000_0000;   // unmapped — no clock edge between
+        #1;
+        if (bus_error === 1'b1) begin
+            $display("PASS: bus_error tracks combinationally (mapped->unmapped)");
+            pass = pass + 1;
+        end else begin
+            $display("FAIL: bus_error did not track same-cycle — be=%b",
+                     bus_error); fail = fail + 1;
+        end
+        wbm_adr = 32'h0001_0100;   // back to mapped — again no clock edge
+        #1;
+        if (bus_error === 1'b0) begin
+            $display("PASS: bus_error tracks combinationally (unmapped->mapped)");
+            pass = pass + 1;
+        end else begin
+            $display("FAIL: bus_error stuck high after remap — be=%b",
+                     bus_error); fail = fail + 1;
         end
 
         wbm_cyc = 0; wbm_stb = 0;

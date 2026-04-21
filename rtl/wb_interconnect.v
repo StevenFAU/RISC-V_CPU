@@ -5,6 +5,28 @@
 //   0x80000000 - 0x8000000F : UART         — Slave 1
 //   0x80001000 - 0x80001007 : GPIO         — Slave 2 (Phase 3)
 //   0x80002000 - 0x8000200F : Timer        — Slave 3 (Phase 4)
+//
+// Phase 0.1 (2026-04-21): Unmapped-access policy
+//
+// An active bus cycle (cyc & stb) to an address that decodes to no slave
+// is handled as a "bus error":
+//   * wbm_ack_o asserts in the same cycle (auto-ack) — prevents the master
+//     from hanging while waiting for an ack that no slave will produce.
+//     Without this, once Phase 4 wires wb_master's stall_o into the
+//     pipeline, any stray load/store would deadlock the core.
+//   * wbm_dat_o returns 32'd0 — deterministic, so trace diffs show exactly
+//     what the core saw on the bad load.
+//   * bus_error_o asserts combinationally, same cycle as the bad access.
+//     It is unconnected in Phase 0 (the wire exists at fpga_top for later
+//     consumption) and becomes the source signal for the load/store
+//     access-fault trap added in Phase 1. Must stay combinational so the
+//     trap can fire in the same cycle the core sees the bogus rdata.
+// Idle cycles (cyc=0 or stb=0) are treated as idle: no ack, no bus_error,
+// zero rdata — the bus is quiet.
+//
+// Writes to unmapped addresses are discarded on the floor: no slave sees
+// wbs*_cyc asserted, so the write never reaches a register. The master
+// still sees an ack and can retire the store.
 
 module wb_interconnect (
     // Wishbone master port (from wb_master)
@@ -59,7 +81,12 @@ module wb_interconnect (
     output wire [31:0] wbs3_dat_o,
     output wire [3:0]  wbs3_sel_o,
     input  wire [31:0] wbs3_dat_i,
-    input  wire        wbs3_ack_i
+    input  wire        wbs3_ack_i,
+
+    // Bus error — asserts combinationally when an active cycle hits an
+    // unmapped address. Unconnected in Phase 0; consumed by the Phase 1
+    // load/store access-fault trap. Must remain combinational.
+    output wire        bus_error_o
 );
 
     // =========================================================================
@@ -80,6 +107,18 @@ module wb_interconnect (
     wire sel_uart  = (wbm_adr_i >= 32'h8000_0000) && (wbm_adr_i <= 32'h8000_000F);
     wire sel_gpio  = (wbm_adr_i >= 32'h8000_1000) && (wbm_adr_i <= 32'h8000_1007);
     wire sel_timer = (wbm_adr_i >= 32'h8000_2000) && (wbm_adr_i <= 32'h8000_200F);
+
+    // =========================================================================
+    // Unmapped-active detection (Phase 0.1)
+    //
+    // An active cycle with no matching slave decode. Drives bus_error_o and
+    // enables the auto-ack path in the return mux below. Idle cycles
+    // (cyc=0 or stb=0) do NOT count as unmapped — the bus is just quiet.
+    // =========================================================================
+    wire wbm_active = wbm_cyc_i & wbm_stb_i;
+    wire unmapped   = wbm_active & ~(sel_dmem | sel_uart | sel_gpio | sel_timer);
+
+    assign bus_error_o = unmapped;
 
     // =========================================================================
     // Slave 0: DMEM — steering
@@ -123,7 +162,11 @@ module wb_interconnect (
     assign wbs3_sel_o = wbm_sel_i;
 
     // =========================================================================
-    // Return mux — route selected slave's dat/ack back to master
+    // Return mux — route selected slave's dat/ack back to master.
+    //
+    // Phase 0.1: an unmapped ACTIVE cycle auto-acks with zero rdata so the
+    // master can retire the transaction. An idle bus (no active cycle)
+    // stays quiescent.
     // =========================================================================
     always @(*) begin
         if (sel_dmem) begin
@@ -138,6 +181,9 @@ module wb_interconnect (
         end else if (sel_timer) begin
             wbm_dat_o = wbs3_dat_i;
             wbm_ack_o = wbs3_ack_i;
+        end else if (unmapped) begin
+            wbm_dat_o = 32'd0;
+            wbm_ack_o = 1'b1;
         end else begin
             wbm_dat_o = 32'd0;
             wbm_ack_o = 1'b0;

@@ -57,7 +57,7 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 ### 0.1 Bug Fixes (from review)
 - `wb_master`: either propagate `wb_ack_i` as a stall/ready into the core, or add a simulation-only assertion that fires if `cyc & stb & !ack` for a cycle. Minimum: the assertion. Preferred: the stall wire, gated behind a parameter so it's off until Phase 4 actually uses it.
 - `wb_timer`: fix the write/increment race by gating the increment when a write to `mtime_lo/hi` is in flight. Add an explicit enable bit or require `mtimecmp != 0` for IRQ assertion, so the default doesn't silently guarantee safety.
-- `wb_interconnect`: decide behavior for unmapped addresses. Options: (a) return 0 with ack, (b) raise a bus-error line that a future trap path consumes. Recommend (b) with the line landing on the floor for now — the wire exists, Phase 1 uses it for the load/store access fault trap.
+- ~~`wb_interconnect`: decide behavior for unmapped addresses. Options: (a) return 0 with ack, (b) raise a bus-error line that a future trap path consumes. Recommend (b) with the line landing on the floor for now — the wire exists, Phase 1 uses it for the load/store access fault trap.~~ Done — combined (a)+(b): unmapped active cycles auto-ack with zero rdata AND raise combinational `bus_error_o`. Auto-ack prevents deadlock once Phase 4 wires stall through; `bus_error_o` is unconnected at `fpga_top` awaiting the Phase 1 trap. See `docs/phase0_changelog.md`.
 - `wb_gpio`: tighten address decode to the actual register range, or update docs to match the decode.
 - `tb_compliance.v` vs linker script address discrepancy: document the split. Not a bug, but worth a one-paragraph comment.
 
@@ -115,6 +115,7 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 - Trap detection:
   - Illegal instruction (any opcode the decoder doesn't recognize).
   - Misaligned load/store (per RV spec — LH/LW/SH/SW with non-aligned address).
+  - Load/store access fault — driven by `wb_interconnect.bus_error_o` (wired in at `fpga_top` in Phase 0.1, dangling until consumed here). `mtval` gets the faulting address; `mcause` is 5 (load access fault) or 7 (store/AMO access fault).
   - ECALL from M-mode.
   - EBREAK.
 - Trap entry (1-cycle transition since the core is still single-cycle):
