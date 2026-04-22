@@ -28,7 +28,11 @@ jobs:
         # Exits zero iff all waivers in docs/lint_waivers.md are applied and no
         # new warnings remain. Any new warning fails CI; fix it at source or add
         # a documented waiver.
-        run: verilator --lint-only -Irtl -Wall rtl/*.v
+        #
+        # --top-module fpga_top pins the synthesis top so MULTITOP doesn't fire
+        # on standalone modules that aren't yet instantiated by the core
+        # (csr_file in Phase 1.0 — wired in by Phase 1.1).
+        run: verilator --lint-only -Irtl -Wall --top-module fpga_top rtl/*.v
 
   unit:
     name: Unit testbenches
