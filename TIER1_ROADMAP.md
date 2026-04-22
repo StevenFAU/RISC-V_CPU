@@ -48,6 +48,19 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 
 ---
 
+## Execution Order
+
+Phases are organized by content below, but **executed in this order:** 1 → 3a → 2 → 3b → 4 → 5 → 6.
+
+Phase 3 (RVFI + formal verification) splits into two sub-phases that run alongside the capabilities they verify:
+
+- **Phase 3a** runs after Phase 1, before Phase 2. Stands up RVFI + riscv-formal on the single-cycle, trap-capable core. Proofs cover synchronous-trap behavior; interrupt properties are out of scope.
+- **Phase 3b** runs after Phase 2, before Phase 4. Extends the formal harness to cover interrupt entry/exit, mip/mie semantics, and interrupt-vs-instruction priority. Proofs grow to cover the full M-mode trap surface.
+
+**Rationale:** Interrupts introduce nondeterminism that's architecturally harder to prove than synchronous traps. Splitting the formal work lets each proof verify a specific capability addition rather than one giant proof carrying the whole sync+async burden. Layering formal alongside the capability it verifies also catches regressions earlier — Phase 2's interrupt logic must keep the Phase 3a sync-trap proofs green before Phase 3b extends them.
+
+---
+
 ## Phase 0 — Foundation Hardening ✅ COMPLETE
 
 *Completed 2026-04-22, commits `e138621`..`eaedc84` (12 commits across
@@ -225,13 +238,15 @@ Original scope retained here for historical reference:
 
 ---
 
-## Phase 3 — RVFI Instrumentation + Formal Verification
+## Phase 3a — RVFI Instrumentation + Formal Verification (Sync Traps)
 
-**Goal:** Mathematically prove the single-cycle core is spec-compliant. Establish formal as a regression gate for all downstream work.
+*Executed after Phase 1, before Phase 2.* Layers formal alongside the synchronous-trap capability built in Phase 1, before Phase 2 introduces interrupt nondeterminism. See [Execution Order](#execution-order) for rationale.
+
+**Goal:** Mathematically prove the single-cycle, trap-capable core is spec-compliant for all RV32I instructions and synchronous traps. Establish formal as a regression gate for all downstream work.
 
 **Duration estimate:** 2–3 weeks.
 
-### 3.1 RVFI Interface
+### 3a.1 RVFI Interface
 - Add RVFI output ports to `rv32i_core.v`:
   - `rvfi_valid`, `rvfi_order`, `rvfi_insn`, `rvfi_trap`, `rvfi_halt`, `rvfi_intr`
   - `rvfi_rs1_addr/data`, `rvfi_rs2_addr/data`, `rvfi_rd_addr/data`
@@ -239,27 +254,58 @@ Original scope retained here for historical reference:
   - `rvfi_mem_addr`, `rvfi_mem_rmask`, `rvfi_mem_wmask`, `rvfi_mem_rdata`, `rvfi_mem_wdata`
 - Full spec: https://github.com/YosysHQ/riscv-formal/blob/main/docs/rvfi.md
 - On a single-cycle core, every one of these is trivially derived — it's a trace of what just happened.
+- `rvfi_intr` ties to 0 in this phase (no interrupts yet — Phase 3b extends this).
 
-### 3.2 riscv-formal Harness
+### 3a.2 riscv-formal Harness
 - Clone `riscv-formal` under `tests/formal/` (similar to how `riscv-tests` is cloned).
 - Write `tests/formal/cores/rv32i_core/checks.cfg` — declares which properties to prove, what ISA subset, bounded depth (start at 8–12 cycles).
-- Properties to prove:
+- Properties to prove (sync subset):
   - Instruction-level correctness (`insn_*` checks for every RV32I instruction).
   - Register file integrity (`reg`, `pc_fwd`, `pc_bwd`).
-  - CSR behavior (`csr_*`).
-  - Trap consistency (`causal`, `liveness`).
+  - CSR behavior (`csr_*`) for the M-mode CSRs landed in Phase 1.
+  - Sync-trap consistency (`causal`) — illegal instruction, ECALL, EBREAK, misaligned access, bus-error access fault.
+  - Interrupt-related properties (`liveness` w.r.t. async events) deferred to Phase 3b.
 
-### 3.3 CI Integration
+### 3a.3 CI Integration
 - Formal job in `.github/workflows/ci.yml` runs the bounded proofs on every push.
-- Phase 3 adds this as a gate alongside unit tests and compliance tests.
+- Phase 3a adds this as a gate alongside unit tests and compliance tests. Phase 2 must keep these proofs green when introducing interrupts.
 
-### 3.4 Documentation
-- `docs/formal_proofs.md` — table of which properties prove at what depth, known waivers.
+### 3a.4 Documentation
+- `docs/formal_proofs.md` — table of which sync-subset properties prove at what depth, known waivers, and the deliberate exclusion of interrupt properties (deferred to Phase 3b).
 
-### Phase 3 Gate
-- All riscv-formal properties prove at depth ≥ 12 cycles on the single-cycle core.
+### Phase 3a Gate
+- All sync-subset riscv-formal properties prove at depth ≥ 12 cycles on the single-cycle core.
 - CI runs formal on every push and blocks merge if any property fails.
-- Docs explain the proof scope and any intentional waivers.
+- Docs explain the proof scope and the deliberate exclusion of interrupt properties.
+
+---
+
+## Phase 3b — Formal Extended to Interrupts
+
+*Executed after Phase 2, before Phase 4.* Extends the Phase 3a harness to cover the asynchronous-trap behavior introduced in Phase 2.
+
+**Goal:** Prove the interrupt-capable single-cycle core handles asynchronous traps spec-compliantly. Phase 3a proofs continue to hold; new proofs cover interrupt-specific behavior.
+
+**Duration estimate:** 1–2 weeks (smaller than 3a — infrastructure is already in place).
+
+### 3b.1 RVFI Interrupt Coverage
+- `rvfi_intr` now reflects actual interrupt entry. Verify the `rvfi_trap`/`rvfi_intr`/`rvfi_pc_wdata` triple correctly distinguishes (a) synchronous trap, (b) asynchronous interrupt, (c) normal retire.
+- Update RVFI signaling per the riscv-formal `rvfi.md` interrupt-specific notes.
+
+### 3b.2 Updated `checks.cfg`
+- Add interrupt-specific properties to the existing harness:
+  - `liveness` — pending interrupt with `mstatus.MIE=1` is taken at the next instruction boundary.
+  - `csr_mip`, `csr_mie` semantics under hardware-driven bit changes.
+  - Synchronous-trap-vs-interrupt priority per spec.
+- Re-prove all Phase 3a properties continue to hold under the extended harness.
+
+### 3b.3 Documentation
+- Update `docs/formal_proofs.md` with the extended property table and interrupt-specific waivers.
+
+### Phase 3b Gate
+- All Phase 3a properties continue to prove.
+- Interrupt-specific properties prove at depth ≥ 12 cycles.
+- CI updated to run the extended proof set.
 
 ---
 
@@ -387,17 +433,18 @@ By end of Phase 6 the repo state plus your own interest tells you which one to c
 ## Cross-Cutting Concerns
 
 ### Regression Gates (cumulative across phases)
-After each phase, the full gate looks like this:
+Rows are listed in **execution order** (1 → 3a → 2 → 3b → 4 → 5 → 6); each row's gate must be met before the next phase begins.
 
 | Phase | Unit TBs | rv32ui | rv32mi | RVFI formal | Fmax target | New requirements                  |
 |-------|----------|--------|--------|-------------|-------------|-----------------------------------|
 | 0     | ✓        | 37/37  | —      | —           | 50 MHz      | CI green, `printf` in C works     |
 | 1     | ✓        | 37/37  | sync   | —           | 50 MHz      | traps + CSRs work                 |
-| 2     | ✓        | 37/37  | full   | —           | 50 MHz      | interrupts work                   |
-| 3     | ✓        | 37/37  | full   | proves      | 50 MHz      | formal in CI                      |
-| 4     | ✓        | 37/37  | full   | proves      | ≥ 80 MHz    | pipeline CPI measured             |
-| 5     | ✓        | 37/37  | full   | proves      | ≥ 80 MHz    | cache speedup measured, MMIO safe |
-| 6     | ✓        | 37/37  | full   | proves      | ≥ 80 MHz    | portfolio deliverables exist      |
+| 3a    | ✓        | 37/37  | sync   | sync proves | 50 MHz      | formal in CI (sync subset)        |
+| 2     | ✓        | 37/37  | full   | sync proves | 50 MHz      | interrupts work                   |
+| 3b    | ✓        | 37/37  | full   | full proves | 50 MHz      | formal extended to interrupts     |
+| 4     | ✓        | 37/37  | full   | full proves | ≥ 80 MHz    | pipeline CPI measured             |
+| 5     | ✓        | 37/37  | full   | full proves | ≥ 80 MHz    | cache speedup measured, MMIO safe |
+| 6     | ✓        | 37/37  | full   | full proves | ≥ 80 MHz    | portfolio deliverables exist      |
 
 ### Bus Protocol
 - Wishbone B4 classic stays the bus protocol through Tier 1.
@@ -415,7 +462,7 @@ After each phase, the full gate looks like this:
 | `docs/phase1_wishbone.md`  | Archive of the completed Wishbone phase              |
 | `docs/datapath.md`         | Architecture reference (kept current)                |
 | `docs/csr_map.md`          | New in Phase 1 — CSR reference                       |
-| `docs/formal_proofs.md`    | New in Phase 3 — proof scope and waivers             |
+| `docs/formal_proofs.md`    | New in Phase 3a; extended in Phase 3b                |
 | `docs/synth_results.md`    | Updated each phase — utilization + timing            |
 | `docs/compliance_results.md` | Updated each phase                                 |
 | `docs/design_notes.md`     | New in Phase 6 — the writeup for reviewers           |
