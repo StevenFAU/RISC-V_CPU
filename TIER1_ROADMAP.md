@@ -172,17 +172,26 @@ Original scope retained here for historical reference:
 
 **Duration estimate:** 2–3 weeks.
 
-### 1.1 New Module: `rtl/csr_file.v`
-- Read/write interface for CSR addresses (12-bit).
-- Implements the M-mode CSRs required by rv32mi: `mstatus`, `mie`, `mip`, `mtvec`, `mscratch`, `mepc`, `mcause`, `mtval`, `misa` (read-only reporting RV32I/M-mode), `mhartid` (hardwired 0), `mvendorid`/`marchid`/`mimpid` (hardwired 0).
-- Also: `cycle`, `cycleh`, `instret`, `instreth`, `time`, `timeh` (the U-mode counters are useful even without U-mode).
-- Partial-write masks per CSR (some bits are WARL, some WLRL, some read-only).
+### 1.0 Standalone CSR file (landed)
+- `rtl/csr_file.v` — 13 M-mode CSRs (`mstatus`, `misa` RO, `mie`, `mtvec`, `mscratch`, `mepc`, `mcause`, `mtval`, `mip`, `mvendorid`/`marchid`/`mimpid`/`mhartid` all RO=0) plus 64-bit `mcycle`/`minstret` and the `cycle`/`cycleh`/`instret`/`instreth` user-RO aliases.
+- Per-CSR write masks (e.g. `mtvec` BASE only, `mepc` word-aligned, `mstatus` MIE+MPIE only with MPP=11 hardwired, `mip` MSIP-only software-writable).
+- Multi-source write priority chain: `trap_enter > trap_return > csr_write_op` for every CSR with a shared writer.
+- Counter write/increment race handled like `wb_timer`: writes to either half replace it and skip that cycle's increment.
+- `time`/`timeh` (CSR addresses 0xC01/0xC81) deliberately deferred — see `docs/tech_debt.md`. MMIO read of `wb_timer.mtime_lo/hi` from software is already the spec-compliant alternative.
+- Self-checking `tb/tb_csr_file.v` covers reset values, write masks, RO rejects, CSRRS/CSRRC, counter behavior, trap entry, MRET, and the priority chain.
 
-### 1.2 Control Path Additions
-- `SYSTEM` opcode (0x73) decode in `control.v` and `alu_decoder.v`.
-- Six CSR instructions: CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI.
-- `ECALL`, `EBREAK`, `MRET` handling.
-- Writeback path: CSR reads become a new source for `rd_data`.
+### 1.1 Wire CSR-instruction decode into the core
+- Decode the CSR subset of the `SYSTEM` opcode (0x73, funct3 != 0): CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI.
+- Route `csr_addr/csr_read_en/csr_write_op/csr_write_data` from `control.v` to `csr_file.v`. For the immediate forms (CSRRWI/CSRRSI/CSRRCI), the source is the zero-extended 5-bit `rs1` field of the instruction.
+- Drive `instret_tick` from the core's retirement signal (1/cycle on this single-cycle core; will need gating once the pipeline can stall in Phase 4).
+- Writeback path: CSR reads become a new source for `rd_data` selected by the CSR-instruction control signal.
+- `csr_illegal` from the file feeds the illegal-instruction trap input wired in 1.3.
+
+### 1.2 Trap FSM — ECALL / EBREAK / MRET
+- Decode the trap-instruction subset of `SYSTEM` (funct3 == 0): ECALL (imm 0), EBREAK (imm 1), MRET (imm 0x302).
+- Wire `trap_enter`/`trap_pc`/`trap_cause`/`trap_tval`/`trap_return` into `csr_file.v`.
+- Redirect PC: trap → `mtvec_o`; MRET → `mepc_o`.
+- Phase 1.0 already enforces `trap_enter` and `trap_return` mutual exclusion via a sim-only assertion in `csr_file.v`; the FSM must respect this by construction.
 
 ### 1.3 Trap Logic
 - Trap detection:
