@@ -28,7 +28,7 @@ module uart_tx #(
 
     assign busy = (state != S_IDLE);
 
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst) begin
             state     <= S_IDLE;
             tx        <= 1'b1;

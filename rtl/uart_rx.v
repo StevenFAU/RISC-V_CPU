@@ -34,7 +34,7 @@ module uart_rx #(
     reg [2:0]  bit_idx;
     reg [7:0]  shift_reg;
 
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst) begin
             state     <= S_IDLE;
             clk_cnt   <= 16'd0;
