@@ -3,6 +3,38 @@
 Running log of fixes/changes landed during Phase 0 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-04-21 (Phase 0.3)
+- [infra] Verilator lint baseline + GitHub Actions CI
+  - `verilator --lint-only -Irtl -Wall rtl/*.v` now exits 0. All 29 baseline
+    warnings resolved — either fixed at source or waived with rationale.
+  - Waiver policy: default is to fix; waivers require written justification.
+    Every waiver is inlined with a one-line comment and enumerated in
+    `docs/lint_waivers.md`. Deferred waivers are labeled explicitly so
+    they can be tracked to closure.
+  - SYNCASYNCNET surfaced three async-reset holdouts from before the
+    Phase 0.1 reset-convention cleanup. All three fixed at source rather
+    than waived:
+      * `uart_tx`, `uart_rx` → commit `c2e3650`
+      * `wb_gpio`            → commit `ab250c6`
+    No SYNCASYNCNET warnings remain.
+  - GitHub Actions workflow `.github/workflows/ci.yml` runs three parallel
+    jobs on every push to main and every PR:
+      * `lint`       — Verilator `--lint-only -Wall` on all of `rtl/`
+      * `unit`       — every `tb/tb_*.v` except the three integration TBs
+                        (`fpga_top`, `compliance`, `rv32i_core`); strict
+                        parse for `ALL PASSED`
+      * `compliance` — `cd tests && make run-all`; strict parse for
+                        `Pass: 37  Fail: 0  Timeout: 0`
+  - `tests/isa` is cached by the hash of `tests/setup.sh`. riscv-tests is
+    fetched at a fixed version so pinning by the setup script is the
+    right granularity.
+  - Badges added to README for each job.
+  - Unit-TB parsing is strict: a TB that exits 0 without printing
+    `ALL PASSED` is treated as a failure. TB `$fatal`-on-failure hardening
+    is explicitly deferred (12+ files). Deferred also: C-build CI
+    coverage (lands after Phase 0.2).
+  - Commits: `273b580` (lint baseline + waivers), `<ci-commit>` (workflow).
+
 ## 2026-04-21
 - [docs] Testbench vs hardware memory-map split documented; compliance baseline refreshed
   - `tb/tb_compliance.v`: added a header comment block explaining that the unified 16 KB memory model differs from the synthesized hardware map (IMEM at 0x0, DMEM at 0x10000). Pointed readers at `sw/link.ld` vs `tests/link.ld` as the source of the split.

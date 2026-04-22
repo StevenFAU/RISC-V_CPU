@@ -68,13 +68,28 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 - Makefile target: `make c PROG=hello_c` → hex files ready for `sim/` and Vivado.
 - Demo program: `sw/hello_c.c` — `printf("Hello from C!\n")` running on the FPGA.
 
-### 0.3 Verilator Lint + CI
-- `verilator --lint-only` clean on all `rtl/*.v`. Fix any real warnings; waive the rest explicitly with `/* verilator lint_off ... */` + a comment explaining why.
-- GitHub Actions workflow (`.github/workflows/ci.yml`):
-  - `lint` job: Verilator lint-only on all RTL.
-  - `unit` job: run every `tb/tb_*.v` testbench with iverilog, parse output for `PASS/FAIL`.
-  - `compliance` job: run the full 37-test rv32ui suite. Fail the build if any test fails.
-- Badge in README.
+### 0.3 Verilator Lint + CI ✅ COMPLETE (2026-04-21)
+Commits: `c2e3650` (uart sync-reset), `ab250c6` (wb_gpio sync-reset),
+`273b580` (lint baseline + waivers), `<ci-commit>` (workflow).
+
+Delivered:
+- `verilator --lint-only -Irtl -Wall rtl/*.v` exits 0.
+- All 29 baseline warnings resolved: SYNCASYNCNET (1) fixed at source,
+  the rest waived inline with written rationales in `docs/lint_waivers.md`.
+- GitHub Actions CI: three parallel jobs (lint / unit / compliance).
+  Unit job parses `ALL PASSED`; compliance job parses the exact
+  `Pass: 37  Fail: 0  Timeout: 0` line from `tests/Makefile`.
+- `tests/isa` cached by `tests/setup.sh` hash.
+- Three per-job badges in README.
+
+Explicitly deferred (not blockers — tracked in `docs/lint_waivers.md`):
+- C-build CI coverage — lands after Phase 0.2 introduces the C toolchain.
+- Testbench hardening with `$fatal` on failure — 12+ files of change;
+  strict `ALL PASSED` parsing is the gate for now.
+- UART `WIDTHEXPAND` cleanup (uart_tx/rx `clk_cnt` comparisons).
+- `dmem.v` `word_addr` oversizing (declared 32b, only 10b used).
+- `fpga_top.imem_addr` port cleanup — appropriate under **Phase 4**,
+  which already revisits the core's external interface (see § 4.2).
 
 ### 0.4 Testbench Architecture Upgrade
 - New testbench harness (`tb/tb_core_harness.v`) that wraps the core behind a bus ready/valid interface. Currently equivalent to same-cycle ack; ready to extend for multi-cycle memory in Phase 4.
@@ -223,6 +238,7 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 - `rv32i_core.v` gains `dmem_stall` / `dmem_ready` inputs. Load data is valid when `dmem_ready` asserts; the core stalls the pipeline until then.
 - `wb_master` now properly propagates `wb_ack_i`. This closes the zero-wait-state bug from Phase 0.
 - `imem` becomes synchronous (BRAM-backed). `imem_addr_next` (already in the core) drives the BRAM address so the 1-cycle read aligns with IF. This is what that signal was built for.
+- Core port-list cleanup folded in: `imem_addr` (current-PC flavor) is dead at the top level today and is waived in `docs/lint_waivers.md` as deferred to this phase — drop it from `rv32i_core.v`'s port list here, along with the Phase 0.3 waiver.
 
 ### 4.3 Branch Prediction
 - v1: always-not-taken (flush on mispredict). 2-cycle penalty per taken branch. Simple, correct, bad CPI on branch-heavy code.

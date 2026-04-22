@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref — new pushes kill in-flight checks.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Verilator lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator
+          verilator --version
+
+      - name: Lint RTL
+        # Exits zero iff all waivers in docs/lint_waivers.md are applied and no
+        # new warnings remain. Any new warning fails CI; fix it at source or add
+        # a documented waiver.
+        run: verilator --lint-only -Irtl -Wall rtl/*.v
+
+  unit:
+    name: Unit testbenches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Icarus Verilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog
+          iverilog -V | head -1
+
+      - name: Run unit testbenches
+        # Skips integration TBs that need externally-built hex firmware:
+        #   fpga_top     — sim-fpga target, needs sim/firmware.hex
+        #   compliance   — covered by the dedicated compliance job
+        #   rv32i_core   — needs a program image
+        #
+        # Each TB must print a line matching "ALL.*PASSED". Missing match → fail.
+        run: |
+          set -eo pipefail
+          fail=0
+          for tb in tb/tb_*.v; do
+            name=$(basename "$tb" .v | sed 's/^tb_//')
+            case "$name" in
+              fpga_top|compliance|rv32i_core)
+                echo "::notice::Skipping integration TB tb_$name (covered elsewhere)"
+                continue
+                ;;
+            esac
+            echo "::group::tb_$name"
+            if output=$(make sim MOD="$name" 2>&1); then
+              echo "$output"
+              if echo "$output" | grep -Eq "ALL[[:space:]]*(TESTS[[:space:]]*)?PASSED"; then
+                echo "::endgroup::"
+                echo "  tb_$name: PASS"
+              else
+                echo "::endgroup::"
+                echo "::error::tb_$name completed but did not print ALL PASSED"
+                fail=1
+              fi
+            else
+              echo "$output"
+              echo "::endgroup::"
+              echo "::error::tb_$name failed to build/run"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  compliance:
+    name: rv32ui compliance (37 tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Icarus Verilog + RISC-V toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog gcc-riscv64-unknown-elf
+          iverilog -V | head -1
+          riscv64-unknown-elf-gcc --version | head -1
+
+      - name: Cache riscv-tests sources
+        # Invalidates when setup.sh changes — riscv-tests is fetched at a fixed
+        # version, so pinning on the setup script is the right granularity.
+        id: cache-rvtests
+        uses: actions/cache@v4
+        with:
+          path: tests/isa
+          key: riscv-tests-${{ hashFiles('tests/setup.sh') }}
+
+      - name: Setup riscv-tests (on cache miss)
+        if: steps.cache-rvtests.outputs.cache-hit != 'true'
+        run: cd tests && ./setup.sh
+
+      - name: Run rv32ui compliance suite
+        # tests/Makefile's run-all prints:
+        #   Total: 37  Pass: 37  Fail: 0  Timeout: 0
+        # If that exact line isn't present, CI fails. If the Makefile's format
+        # changes, this breaks loudly — that's the kind of break we want.
+        run: |
+          set -eo pipefail
+          cd tests
+          make run-all 2>&1 | tee run-all.log
+          if ! grep -Fq "Pass: 37  Fail: 0  Timeout: 0" run-all.log; then
+            echo "::error::rv32ui compliance regression"
+            exit 1
+          fi

@@ -1,5 +1,9 @@
 # RV32I Single-Cycle RISC-V CPU
 
+[![Lint](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml/badge.svg?branch=main&event=push&job=lint)](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml)
+[![Unit tests](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml/badge.svg?branch=main&event=push&job=unit)](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml)
+[![Compliance](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml/badge.svg?branch=main&event=push&job=compliance)](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml)
+
 A single-cycle RV32I RISC-V processor implemented in Verilog, targeting the Digilent Nexys4 DDR (Artix-7 XC7A100T) FPGA.
 
 ## Features
