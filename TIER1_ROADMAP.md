@@ -61,12 +61,35 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 - `wb_gpio`: tighten address decode to the actual register range, or update docs to match the decode.
 - ~~`tb_compliance.v` vs linker script address discrepancy: document the split. Not a bug, but worth a one-paragraph comment.~~ Done — memory-model comment block added to `tb/tb_compliance.v`; headers added to both `sw/link.ld` and `tests/link.ld` explaining which script targets which memory model; README cross-references the testbench comment; `docs/compliance_results.md` refreshed with post-Phase-0.1 cycle counts. See `docs/phase0_changelog.md`.
 
-### 0.2 C Toolchain + Minimal Runtime
-- Crt0 (`sw/crt0.S`): zero bss, set up sp, jump to `main`.
-- Linker script for C programs (`sw/c_link.ld`): `.text` at 0x00000000 (IMEM), `.rodata/.data/.bss` at 0x00010000 (DMEM), stack at top of DMEM.
-- Syscall stub: `_write()` → UART TX poll-and-send. Enough to make `printf` work (via newlib-nano, `-specs=nano.specs`).
-- Makefile target: `make c PROG=hello_c` → hex files ready for `sim/` and Vivado.
-- Demo program: `sw/hello_c.c` — `printf("Hello from C!\n")` running on the FPGA.
+### 0.2 C Toolchain + Minimal Runtime ✅ SIM-VERIFIED (2026-04-22)
+Commits: `8283b80` (toolchain infrastructure), plus this commit for
+the demo program, testbench split, and documentation.
+
+Delivered:
+- `sw/c_link.ld` — linker script (IMEM 64 KB, DMEM 4 KB, `.rodata` in
+  DMEM per the Harvard-bus constraint).
+- `sw/crt0.S` — startup: set `sp`, zero `.bss`, call `main`, spin.
+- `sw/syscalls.c` — newlib stubs: `_write` over UART, `_fstat` reports
+  char-mode to keep printf unbuffered, no heap (`_sbrk` returns -1).
+- `sw/hello_c.c` — `printf("Hello from C!\n")` demo.
+- Root `Makefile` `c` target with toolchain discovery chain
+  (`/opt/riscv` → `$HOME/riscv` → PATH; sentinel errors out if none).
+- `sim/make_dmem_hex.py` — sibling of the IMEM hex tool for DMEM.
+- `tb/tb_fpga_top_c.v` + `make sim-fpga-c` — C-side testbench.
+  `tb/tb_fpga_top.v` renamed to `tb_fpga_top_asm.v` to pair with it.
+- `docs/toolchain.md` — build-from-source procedure; explains why
+  Ubuntu's package and the Vivado bundle both fall short.
+- `docs/tech_debt.md` — tracks deferred work (CI for C builds,
+  Actions Node 20 bump).
+
+ELF sizes (rv32i/ilp32, -specs=nano.specs, -Os):
+`.text` 4294 B · `.data` 92 B · `.bss` 328 B. Comfortably under the
+16 KB sanity threshold for newlib-nano.
+
+Explicitly deferred (tracked in `docs/tech_debt.md`):
+- CI coverage for C builds — requires building riscv-gnu-toolchain in
+  CI with a cache, ~30-60 min first build.
+- Hardware verification on the physical Nexys4 board.
 
 ### 0.3 Verilator Lint + CI ✅ COMPLETE (2026-04-21)
 Commits: `c2e3650` (uart sync-reset), `ab250c6` (wb_gpio sync-reset),

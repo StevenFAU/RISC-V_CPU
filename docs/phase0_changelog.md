@@ -3,6 +3,64 @@
 Running log of fixes/changes landed during Phase 0 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-04-22 (Phase 0.2)
+- [infra] C toolchain, newlib-nano runtime, `printf` over UART
+  - `sw/c_link.ld` — linker script for C programs.
+    - IMEM region 0x00000000 + 64 KB (bumped from 4 KB — old cap was
+      artificial; hardware has 16K words of BRAM already). DMEM region
+      0x00010000 + 4 KB.
+    - `.rodata` placed in DMEM, NOT IMEM. Rationale: the core is
+      Harvard-bus; a `lbu` against a printf format string must route
+      through the data bus, which cannot reach IMEM. Unified-memory
+      rework is explicitly Phase 4 territory.
+    - `.eh_frame`, `.note`, `.comment` sections discarded — bare-metal
+      builds never unwind.
+    - Symbols exposed for crt0: `_bss_start`, `_bss_end`, `_stack_top`,
+      `_end`. Stack grows downward from `ORIGIN(DMEM)+LENGTH(DMEM)`.
+  - `sw/crt0.S` — startup code. Sets `sp` to `_stack_top`, zeros the
+    `.bss` region, calls `main`, spins after return. Lives in
+    `.text.init` so the linker places it first in IMEM.
+  - `sw/syscalls.c` — newlib stubs. `_write` polls UART TX-busy and
+    sends each byte (matches the pattern in `sw/hello.S`). `_fstat`
+    reports `S_IFCHR` for stdin/stdout/stderr so newlib-nano's stdio
+    layer doesn't buffer indefinitely. `_isatty` returns 1 for those
+    fds. `_sbrk` returns -1 (no heap). `_read`/`_close`/`_lseek` are
+    minimal stubs. UART-RX syscall wiring deferred to Phase 2.
+  - `sw/hello_c.c` — the demo: `printf("Hello from C!\n")`.
+  - Root `Makefile` gains a `c` target. Toolchain discovery probes
+    `/opt/riscv/bin/riscv32-unknown-elf-gcc`, then
+    `$HOME/riscv/bin/riscv32-unknown-elf-gcc`, then PATH. Sentinel
+    `TOOLCHAIN_NOT_FOUND` trips an actionable error pointing at
+    `docs/toolchain.md`. Does NOT fall back to the Ubuntu
+    `riscv64-unknown-elf-gcc` (no newlib) or the Vivado bundle
+    (broken nano for rv32i/ilp32).
+  - `sim/make_dmem_hex.py` — sibling of `make_imem_hex.py`; converts
+    byte-addressed objcopy output (with `--change-section-address`
+    shifts) into the word-addressed hex format `$readmemh` expects.
+  - `tb/tb_fpga_top.v` split into `tb/tb_fpga_top_asm.v` (existing
+    "Hello, RISC-V!" assembly path) and `tb/tb_fpga_top_c.v` (new
+    "Hello from C!" path using parameter-driven IMEM/DMEM init from
+    the hex files). New `make sim-fpga-c` target drives the C TB.
+    CI `unit` job's integration-TB skip list updated to include both.
+  - `docs/toolchain.md` — why no distro package works, what to run
+    to build riscv-gnu-toolchain from source, Makefile discovery
+    chain, measured wall-clock + disk cost.
+  - `docs/tech_debt.md` — tracks deferred work: CI coverage for C
+    builds (needs toolchain build/cache in CI; ~30-60 min cold build)
+    and `actions/checkout@v4`/`actions/cache@v4` Node 20 deprecation
+    (bump to `@v5` before 2026-06-02).
+  - ELF size for `hello_c.elf` (rv32i/ilp32, -specs=nano.specs, -Os):
+    `.text` 4294 B, `.data` 92 B, `.bss` 328 B. Well under the 16 KB
+    sanity-check threshold, confirming newlib-nano linked correctly
+    (full newlib would be ~40 KB).
+  - Simulation (`make sim-fpga-c`): captured all 14 bytes of
+    `"Hello from C!\n"` correctly. Hardware verification pending
+    (no physical board this session).
+  - Regressions: 16/16 unit TBs PASS, compliance 37/37 PASS,
+    Verilator lint CLEAN.
+  - CI coverage for C builds is deferred to a follow-up — see
+    `docs/tech_debt.md`.
+
 ## 2026-04-21 (Phase 0.3)
 - [infra] Verilator lint baseline + GitHub Actions CI
   - `verilator --lint-only -Irtl -Wall rtl/*.v` now exits 0. All 29 baseline

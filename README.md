@@ -108,7 +108,7 @@ The Wishbone interconnect routes the core's data bus to the correct slave based 
 
 ## Build & Simulate
 
-Requires [Icarus Verilog](http://iverilog.icarus.com/) and the RISC-V toolchain (`riscv64-unknown-elf-gcc`).
+Requires [Icarus Verilog](http://iverilog.icarus.com/) and the RISC-V toolchain (`riscv64-unknown-elf-gcc` for assembly; a purpose-built `riscv32-unknown-elf-gcc` with newlib-nano for C — see [docs/toolchain.md](docs/toolchain.md)).
 
 ```bash
 # Run a single module testbench
@@ -117,16 +117,42 @@ make sim MOD=alu
 # Run full-core integration test
 make sim-top
 
-# Run FPGA top-level UART test (Hello, RISC-V!)
+# Run FPGA top-level UART test — assembly "Hello, RISC-V!"
 make sim-fpga
+
+# Run FPGA top-level UART test — C "Hello from C!"
+make sim-fpga-c
 
 # Assemble a test program (uses sw/link.ld, outputs to sim/)
 make asm PROG=test_basic
+
+# Build a C program (uses sw/c_link.ld, outputs sim/<name>.hex + sim/<name>_dmem.hex)
+make c PROG=hello_c
 ```
 
 > **Note:** Simulation may emit `$readmemh` warnings about insufficient words in hex files.
 > This is expected — test programs are smaller than the full memory arrays. These warnings
 > are harmless and do not affect results.
+
+### Writing C Programs
+
+Phase 0.2 adds a C toolchain path. Any `sw/*.c` file can be built into
+an IMEM + DMEM hex pair with `make c PROG=<name>`.
+
+Constraints to know about:
+
+- **newlib-nano only.** `printf` works; floating-point `printf` (`%f`)
+  is deliberately disabled (saves ~20 KB of `.text`).
+- **No heap.** `_sbrk` returns -1; any `malloc` will fail at runtime.
+  Keep programs stack-only. Total stack + `.data` + `.bss` must fit in
+  4 KB of DMEM.
+- **`.rodata` lives in DMEM, not IMEM.** Consequence of the core's
+  Harvard-bus architecture — a load instruction (`lbu`/`lw`) cannot
+  reach the IMEM BRAM. The linker script (`sw/c_link.ld`) enforces
+  this. A unified-memory rework is deferred to Phase 4.
+
+See `sw/hello_c.c` for the canonical example. Toolchain setup is in
+[docs/toolchain.md](docs/toolchain.md).
 
 ### Compliance Tests
 

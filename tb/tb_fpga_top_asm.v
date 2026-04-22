@@ -1,8 +1,13 @@
-// FPGA Top-Level Testbench
-// Loads hello firmware, captures UART TX output, verifies "Hello, RISC-V!\n"
+// FPGA Top-Level Testbench — assembly "Hello, RISC-V!" path.
+//
+// Loads sim/firmware.hex (produced by `make asm PROG=hello`) and a
+// hand-built DMEM image, captures UART TX, verifies "Hello, RISC-V!\r\n".
+//
+// The C hello-world path lives in tb/tb_fpga_top_c.v (driven by
+// `make sim-fpga-c`).
 `timescale 1ns/1ps
 
-module tb_fpga_top;
+module tb_fpga_top_asm;
 
     // Use fast baud for simulation
     // CLK_FREQ is the core clock (after /2 divider), BAUD_RATE is UART baud

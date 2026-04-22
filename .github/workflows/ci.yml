@@ -44,7 +44,8 @@ jobs:
 
       - name: Run unit testbenches
         # Skips integration TBs that need externally-built hex firmware:
-        #   fpga_top     — sim-fpga target, needs sim/firmware.hex
+        #   fpga_top_asm — sim-fpga target, needs sim/firmware.hex
+        #   fpga_top_c   — sim-fpga-c target, needs sim/hello_c.hex (C build)
         #   compliance   — covered by the dedicated compliance job
         #   rv32i_core   — needs a program image
         #
@@ -55,7 +56,7 @@ jobs:
           for tb in tb/tb_*.v; do
             name=$(basename "$tb" .v | sed 's/^tb_//')
             case "$name" in
-              fpga_top|compliance|rv32i_core)
+              fpga_top_asm|fpga_top_c|compliance|rv32i_core)
                 echo "::notice::Skipping integration TB tb_$name (covered elsewhere)"
                 continue
                 ;;
