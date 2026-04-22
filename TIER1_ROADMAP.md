@@ -86,7 +86,8 @@ Delivered:
 - Three per-job badges in README.
 
 Explicitly deferred (not blockers — tracked in `docs/lint_waivers.md`):
-- C-build CI coverage — lands after Phase 0.2 introduces the C toolchain.
+- C-build CI coverage — deferred pending a toolchain build/cache
+  solution. Tracked in `docs/tech_debt.md`.
 - Testbench hardening with `$fatal` on failure — 12+ files of change;
   strict `ALL PASSED` parsing is the gate for now.
 - UART `WIDTHEXPAND` cleanup (uart_tx/rx `clk_cnt` comparisons).
