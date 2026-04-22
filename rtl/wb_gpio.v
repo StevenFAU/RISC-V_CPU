@@ -36,7 +36,7 @@ module wb_gpio (
     // =========================================================================
     // Output register — synchronous write
     // =========================================================================
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst)
             gpio_out <= 16'd0;
         else if (valid && wb_we_i && reg_sel == 3'h0)
