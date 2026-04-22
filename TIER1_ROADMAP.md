@@ -48,7 +48,13 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 
 ---
 
-## Phase 0 — Foundation Hardening
+## Phase 0 — Foundation Hardening ✅ COMPLETE
+
+*Completed 2026-04-22, commits `e138621`..`eaedc84` (12 commits across
+0.1, 0.2, 0.3). Closure commit tagged `phase0-complete`. See
+[`docs/phase0_retrospective.md`](docs/phase0_retrospective.md) for
+lessons learned and [`docs/phase0_changelog.md`](docs/phase0_changelog.md)
+for the per-commit record.*
 
 **Goal:** Build the infrastructure every later phase depends on. Fix the known bugs. Make refactors safe.
 
@@ -118,14 +124,26 @@ Explicitly deferred (not blockers — tracked in `docs/lint_waivers.md`):
 - `fpga_top.imem_addr` port cleanup — appropriate under **Phase 4**,
   which already revisits the core's external interface (see § 4.2).
 
-### 0.4 Testbench Architecture Upgrade
+### 0.4 Testbench Architecture Upgrade — DEFERRED TO PHASE 4
+
+The original Phase 0.4 (testbench harness wrapping the core behind a
+bus ready/valid interface) is explicitly deferred to Phase 4.
+Rationale: the harness design depends on the pipeline's bus contract,
+which Phase 4 defines (see § 4.2). Building a generic harness in Phase
+0 would either (a) over-fit to unknown requirements or (b)
+under-constrain to the point of triviality. Better to build it when
+the contract exists.
+
+Original scope retained here for historical reference:
+
 - New testbench harness (`tb/tb_core_harness.v`) that wraps the core behind a bus ready/valid interface. Currently equivalent to same-cycle ack; ready to extend for multi-cycle memory in Phase 4.
 - Port existing `tb_compliance.v` to use the new harness. Gate: 37/37 still pass.
 
-### 0.5 Documentation
-- Rename current `CLAUDE.md` → `docs/phase1_wishbone.md`. Add a 1-paragraph header explaining it's archived.
-- `TIER1_ROADMAP.md` (this file) becomes the active planning doc.
-- Update `README.md` "Future Work" section to point at this roadmap.
+### 0.5 Documentation — ABSORBED INTO CLOSURE COMMIT
+- Rename current `CLAUDE.md` → `docs/phase1_wishbone.md`. Add a 1-paragraph header explaining it's archived. *(Done earlier in commit `2b42150`.)*
+- `TIER1_ROADMAP.md` (this file) becomes the active planning doc. *(Done.)*
+- Update `README.md` "Future Work" section to point at this roadmap. *(Superseded — README rewritten in the closure commit to describe the post-Phase-0 state; roadmap linkage preserved.)*
+- Phase 0 retrospective authored: [`docs/phase0_retrospective.md`](docs/phase0_retrospective.md).
 
 ### Phase 0 Gate
 - All rv32ui tests pass under the new harness.

@@ -1,231 +1,167 @@
-# RV32I Single-Cycle RISC-V CPU
+# RV32I RISC-V CPU + SoC
 
 [![Lint](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml/badge.svg?branch=main&event=push&job=lint)](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml)
 [![Unit tests](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml/badge.svg?branch=main&event=push&job=unit)](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml)
 [![Compliance](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml/badge.svg?branch=main&event=push&job=compliance)](https://github.com/StevenFAU/RISC-V_CPU/actions/workflows/ci.yml)
 
-A single-cycle RV32I RISC-V processor implemented in Verilog, targeting the Digilent Nexys4 DDR (Artix-7 XC7A100T) FPGA.
+A single-cycle RV32I processor with a Wishbone B4 SoC fabric, built for
+FPGA (Digilent Nexys4 DDR, Artix-7 XC7A100T). Verified against the
+rv32ui compliance suite (37/37 passing). Bare-metal C runtime with
+`printf` over UART.
 
-## Features
+## Status
 
-- Full RV32I instruction set (37/37 rv32ui compliance tests pass)
-- Single-cycle datapath: PC, register file, ALU, immediate generator, control unit
-- External memory bus ports (SoC-ready architecture)
-- Wishbone B4 classic bus fabric with 4 slave peripherals
-- Byte-addressable data memory with LB/LH/LW/LBU/LHU/SB/SH/SW support
-- Memory-mapped UART TX/RX (115200 baud, 8N1)
-- Memory-mapped GPIO (16 LEDs + 16 slide switches)
-- CLINT-style 64-bit timer with comparator and IRQ output
-- FPGA-verified: prints "Hello, RISC-V!" over USB-UART
+- **Phase 0 complete.** Foundation hardened — RTL bug fixes, C
+  toolchain, Verilator lint, and CI. See
+  [`TIER1_ROADMAP.md`](TIER1_ROADMAP.md) for the plan and
+  [`docs/phase0_retrospective.md`](docs/phase0_retrospective.md) for
+  what Phase 0 actually taught us.
+- **Phase 1 next.** CSRs, traps, and M-mode. Picks up the
+  `bus_error_o` and `timer_irq` wires Phase 0 left dangling for it.
 
 ## Architecture
 
-```
-+--------------------------------------------------------+
-| rv32i_core                                             |
-|                                                        |
-|  +----+   +------+   +---------+   +-----+   +------+  |
-|  | PC |-->| IMEM |-->| Control |-->| ALU |-->|WB Mux|  |
-|  +----+   | Bus  |   | Decode  |   +-----+   +------+  |
-|           +------+   +---------+                       |
-|                                                        |
-|  +--------+  +--------+  +------+                      |
-|  |Regfile |  |ImmGen  |  | DMEM |                      |
-|  +--------+  +--------+  | Bus  |                      |
-|                          +------+                      |
-+--------------------------------------------------------+
-        |                         |
-   imem_addr/data       dmem_addr/data/we/re/funct3
-        |                         |
-+-------+--------+   +-----------+-----------+
-|      IMEM      |   |       wb_master       |
-|  (16K words)   |   |   (core -> Wishbone)  |
-+----------------+   +-----------+-----------+
-                                 |
-                     +-----------+-----------+
-                     |    wb_interconnect    |
-                     |    (address decode)   |
-                     +-----------+-----------+
-                       |      |     |      |
-                +------+ +-----+ +-----+ +-------+
-                | DMEM | |UART | |GPIO | |TIMER  |
-                | 4KB  | |TX/RX| | LED | |CLINT  |
-                +------+ +-----+ | SW  | +-------+
-                                 +-----+
-```
+Single-cycle RV32I core (`rtl/rv32i_core.v`) with external instruction
+and data bus ports. The data bus runs through a Wishbone B4
+interconnect to four slaves:
 
-The core does **not** contain internal memories — it exposes instruction fetch and data memory bus ports. Memory, peripherals, and bus routing are instantiated by the top-level wrapper (`fpga_top.v`), making the core ready for SoC integration.
+- `wb_dmem` — 4 KB data RAM
+- `wb_uart` — 115200 8N1 TX/RX
+- `wb_gpio` — 16 LEDs and 16 slide switches
+- `wb_timer` — CLINT-style 64-bit `mtime`/`mtimecmp` with IRQ
 
-The Wishbone interconnect routes the core's data bus to the correct slave based on address. Each peripheral is a standard Wishbone B4 slave — new peripherals plug in by adding a slave port and address decode line.
+Instruction fetch is a separate Harvard-style port; IMEM is BRAM-backed
+with a `pc_next` pre-fetch path. The compliance testbench uses a
+unified 16 KB memory model — see the header comment in
+`tb/tb_compliance.v` and the split between `sw/link.ld` (synthesized
+hardware) and `tests/link.ld` (testbench). Deep dive in
+[`docs/datapath.md`](docs/datapath.md); bus architecture in
+[`docs/phase1_wishbone.md`](docs/phase1_wishbone.md) (archived).
 
 ## Memory Map
 
-| Region           | Address Range           | Size  | Module       | Notes                     |
-|------------------|-------------------------|-------|--------------|---------------------------|
-| IMEM             | 0x00000000 - 0x0000FFFF | 64 KB | `imem.v`     | 16K words, read-only, not on WB bus |
-| DMEM (RAM)       | 0x00010000 - 0x00010FFF | 4 KB  | `wb_dmem.v`  | Byte-addressable, R/W     |
-| UART TX Data     | 0x80000000              | 1 word| `wb_uart.v`  | Write byte to transmit    |
-| UART TX Status   | 0x80000004              | 1 word|              | Bit 0: TX busy            |
-| UART RX Data     | 0x80000008              | 1 word|              | Read received byte        |
-| UART RX Status   | 0x8000000C              | 1 word|              | Bit 0: valid (read clears)|
-| GPIO Output      | 0x80001000              | 1 word| `wb_gpio.v`  | Drives LED[15:0]          |
-| GPIO Input       | 0x80001004              | 1 word|              | Reads SW[15:0]            |
-| Timer mtime_lo   | 0x80002000              | 1 word| `wb_timer.v` | Free-running counter [31:0]  |
-| Timer mtime_hi   | 0x80002004              | 1 word|              | Free-running counter [63:32] |
-| Timer mtimecmp_lo| 0x80002008              | 1 word|              | Comparator [31:0]         |
-| Timer mtimecmp_hi| 0x8000200C              | 1 word|              | Comparator [63:32]        |
+| Region           | Address Range           | Size  | Module       | Notes                                |
+|------------------|-------------------------|-------|--------------|--------------------------------------|
+| IMEM             | 0x00000000 - 0x0000FFFF | 64 KB | `imem.v`     | 16K words, read-only, not on WB bus  |
+| DMEM (RAM)       | 0x00010000 - 0x00010FFF | 4 KB  | `wb_dmem.v`  | Byte-addressable, R/W                |
+| UART             | 0x80000000 - 0x8000000F | 16 B  | `wb_uart.v`  | TX data/status, RX data/status       |
+| GPIO             | 0x80001000 - 0x80001007 | 8 B   | `wb_gpio.v`  | Output = LEDs, input = switches      |
+| Timer            | 0x80002000 - 0x8000200F | 16 B  | `wb_timer.v` | `mtime_lo/hi`, `mtimecmp_lo/hi`      |
 
-## Directory Structure
+Accesses outside these ranges auto-ack with zero data and assert
+`wb_interconnect.bus_error_o` (a combinational line currently
+unconnected at `fpga_top` — consumed by Phase 1's load/store
+access-fault trap).
 
-```
-├── rtl/                  # Synthesizable Verilog
-│   ├── rv32i_core.v      # CPU core (datapath + control)
-│   ├── pc.v              # Program counter
-│   ├── regfile.v         # 32x32 register file
-│   ├── alu.v             # 10-operation ALU
-│   ├── alu_decoder.v     # ALU control decoder
-│   ├── control.v         # Main control decoder
-│   ├── immgen.v          # Immediate generator (R/I/S/B/U/J)
-│   ├── imem.v            # Instruction memory (word-addressed)
-│   ├── dmem.v            # Data memory (word-based, byte enables)
-│   ├── wb_master.v       # Wishbone master bridge (core → WB)
-│   ├── wb_interconnect.v # Address decoder + return mux
-│   ├── wb_dmem.v         # Data memory WB slave wrapper
-│   ├── wb_uart.v         # UART TX/RX WB slave
-│   ├── wb_gpio.v         # GPIO WB slave (LEDs + switches)
-│   ├── wb_timer.v        # CLINT-style timer WB slave
-│   ├── uart_tx.v         # UART transmitter (8N1)
-│   ├── uart_rx.v         # UART receiver (8N1)
-│   ├── fpga_top.v        # FPGA top-level wrapper
-│   └── defines.v         # Opcode/funct macros
-├── tb/                   # Testbenches
-├── sim/                  # Simulation hex files and scripts
-├── sw/                   # Assembly programs and linker scripts
-├── tests/                # Compliance test infrastructure
-├── constraints/          # Vivado XDC constraints
-└── docs/                 # Documentation and reference
-```
+## Verification
+
+- **Compliance:** 37/37 rv32ui tests passing. Cycle counts in
+  [`docs/compliance_results.md`](docs/compliance_results.md).
+- **Unit tests:** 16 self-checking testbenches under `tb/`, parsed
+  strictly for `ALL PASSED` in CI.
+- **Lint:** `verilator --lint-only -Wall` clean with 29 documented
+  waivers — see [`docs/lint_waivers.md`](docs/lint_waivers.md).
+- **CI:** GitHub Actions runs lint + unit + compliance jobs in parallel
+  on every push and PR.
+
+## Synthesis
+
+Last measured at commit `6edc15c` (2026-03-29, pre-Phase-0): ~1,969
+LUTs / 275 FFs / 0.5 BRAM at 50 MHz on Artix-7 speed grade -1
+(WNS +0.301 ns). Phase 0.1's RTL changes (reset-style conversions,
+`stall_o` / `bus_error_o` ports, tightened peripheral decodes) are
+expected to move utilisation by a handful of LUTs; synthesis will be
+re-run the next time Vivado is opened. History in
+[`docs/synth_results.md`](docs/synth_results.md); build procedure in
+[`docs/synth_guide.md`](docs/synth_guide.md). Core is ~3% of the
+XC7A100T — enormous headroom for Phase 4+ work.
 
 ## Build & Simulate
 
-Requires [Icarus Verilog](http://iverilog.icarus.com/) and the RISC-V toolchain (`riscv64-unknown-elf-gcc` for assembly; a purpose-built `riscv32-unknown-elf-gcc` with newlib-nano for C — see [docs/toolchain.md](docs/toolchain.md)).
+Requires [Icarus Verilog](http://iverilog.icarus.com/) and
+[Verilator](https://www.veripool.org/verilator/) for lint. Assembly
+flow uses `riscv64-unknown-elf-gcc`; C flow requires a purpose-built
+rv32i/ilp32 toolchain with newlib-nano — see
+[`docs/toolchain.md`](docs/toolchain.md) for why Ubuntu packages and
+the Vivado bundle both fall short.
 
 ```bash
-# Run a single module testbench
+# Module testbench
 make sim MOD=alu
 
-# Run full-core integration test
+# Full-core integration
 make sim-top
 
-# Run FPGA top-level UART test — assembly "Hello, RISC-V!"
+# FPGA top-level — assembly "Hello, RISC-V!"
 make sim-fpga
 
-# Run FPGA top-level UART test — C "Hello from C!"
+# FPGA top-level — C "Hello from C!"
 make sim-fpga-c
 
-# Assemble a test program (uses sw/link.ld, outputs to sim/)
+# Build an assembly program (sw/link.ld → sim/<name>.hex)
 make asm PROG=test_basic
 
-# Build a C program (uses sw/c_link.ld, outputs sim/<name>.hex + sim/<name>_dmem.hex)
+# Build a C program (sw/c_link.ld → sim/<name>.hex + sim/<name>_dmem.hex)
 make c PROG=hello_c
-```
 
-> **Note:** Simulation may emit `$readmemh` warnings about insufficient words in hex files.
-> This is expected — test programs are smaller than the full memory arrays. These warnings
-> are harmless and do not affect results.
+# Run all 37 rv32ui compliance tests
+cd tests && make run-all
+
+# Verilator lint
+verilator --lint-only -Irtl -Wall rtl/*.v
+```
 
 ### Writing C Programs
 
-Phase 0.2 adds a C toolchain path. Any `sw/*.c` file can be built into
-an IMEM + DMEM hex pair with `make c PROG=<name>`.
+Any `sw/*.c` file builds to an IMEM+DMEM hex pair with
+`make c PROG=<name>`. Constraints:
 
-Constraints to know about:
+- **newlib-nano only.** `printf` works; `%f` deliberately disabled.
+- **No heap.** `_sbrk` returns -1. Keep programs stack-only.
+- **`.rodata` lives in DMEM, not IMEM.** Harvard-bus constraint — a
+  load cannot reach IMEM BRAM. `sw/c_link.ld` enforces this. A
+  unified-memory rework is deferred to Phase 4.
 
-- **newlib-nano only.** `printf` works; floating-point `printf` (`%f`)
-  is deliberately disabled (saves ~20 KB of `.text`).
-- **No heap.** `_sbrk` returns -1; any `malloc` will fail at runtime.
-  Keep programs stack-only. Total stack + `.data` + `.bss` must fit in
-  4 KB of DMEM.
-- **`.rodata` lives in DMEM, not IMEM.** Consequence of the core's
-  Harvard-bus architecture — a load instruction (`lbu`/`lw`) cannot
-  reach the IMEM BRAM. The linker script (`sw/c_link.ld`) enforces
-  this. A unified-memory rework is deferred to Phase 4.
+Canonical example: `sw/hello_c.c`. ELF sizes (rv32i/ilp32,
+`-specs=nano.specs`, `-Os`): `.text` 4294 B / `.data` 92 B / `.bss`
+328 B.
 
-See `sw/hello_c.c` for the canonical example. Toolchain setup is in
-[docs/toolchain.md](docs/toolchain.md).
+### FPGA Flow
 
-### Compliance Tests
+Vivado 2025.2, Nexys4 DDR (Artix-7 XC7A100T), 50 MHz core clock (100
+MHz input / 2). Pin assignments in `constraints/`; step-by-step in
+[`docs/synth_guide.md`](docs/synth_guide.md).
 
-> **Note:** Hand-written programs (`sw/*.S`) and compliance tests use
-> different linker scripts targeting different memory models. See the
-> comment block at the top of `tb/tb_compliance.v` for details.
+## Documentation
 
-The compliance tests require the [riscv-tests](https://github.com/riscv-software-src/riscv-tests) repo. To set up:
+| File                                                              | Purpose                                    |
+|-------------------------------------------------------------------|--------------------------------------------|
+| [`TIER1_ROADMAP.md`](TIER1_ROADMAP.md)                            | Active planning doc (Phases 0–6)           |
+| [`docs/datapath.md`](docs/datapath.md)                            | Architecture reference                     |
+| [`docs/phase1_wishbone.md`](docs/phase1_wishbone.md)              | Wishbone bus architecture (archived)       |
+| [`docs/phase0_changelog.md`](docs/phase0_changelog.md)            | Phase 0 commit log                         |
+| [`docs/phase0_retrospective.md`](docs/phase0_retrospective.md)    | Phase 0 lessons learned                    |
+| [`docs/toolchain.md`](docs/toolchain.md)                          | C toolchain build-from-source              |
+| [`docs/lint_waivers.md`](docs/lint_waivers.md)                    | Verilator waiver rationales                |
+| [`docs/compliance_results.md`](docs/compliance_results.md)        | rv32ui cycle counts                        |
+| [`docs/synth_results.md`](docs/synth_results.md)                  | Synthesis utilisation history              |
+| [`docs/synth_guide.md`](docs/synth_guide.md)                      | Vivado build procedure                     |
+| [`docs/tech_debt.md`](docs/tech_debt.md)                          | Tracked technical debt with triggers       |
+| [`docs/rv32i_reference.md`](docs/rv32i_reference.md)              | ISA quick reference                        |
 
-```bash
-# One-time setup: download test sources
-cd tests
-./setup.sh
+## Roadmap
 
-# Run all 37 rv32ui tests
-make run-all
+After Phase 0 foundation, the work splits into:
 
-# Run a single test
-make run TEST=add
-```
+- **Phase 1** — CSRs, traps, M-mode
+- **Phase 2** — Interrupts (timer, UART-RX)
+- **Phase 3** — RVFI + formal verification
+- **Phase 4** — 5-stage pipeline refactor
+- **Phase 5** — I$ / D$ caches
+- **Phase 6** — Tier 1 wrap-up and capstone decision (ML accelerator,
+  DSP/SDR, or OS/RTOS)
 
-## FPGA Synthesis
-
-Requires Vivado 2023.x+ (free WebPACK edition). See [docs/synth_guide.md](docs/synth_guide.md) for step-by-step instructions.
-
-**Target:** Nexys4 DDR (Artix-7 XC7A100T)
-**Core clock:** 50 MHz (100 MHz / 2 divider)
-**Timing:** WNS +0.301 ns (met)
-
-### Resource Utilization
-
-| Resource       | Used  | Available | %      |
-|----------------|-------|-----------|--------|
-| Slice LUTs     | 1,969 | 63,400    | 3.11%  |
-| — as Logic     | 1,413 |           | 2.23%  |
-| — as Memory    | 556   | 19,000    | 2.93%  |
-| Slice FFs      | 275   | 126,800   | 0.22%  |
-| Block RAM      | 0.5   | 135       | 0.37%  |
-| DSP            | 0     | 240       | 0.00%  |
-
-IMEM uses Block RAM (synchronous read with pc_next pre-fetch). DMEM (4KB) uses distributed RAM (combinational reads required by single-cycle core).
-
-### Pin Assignments
-
-| Signal         | Pin(s)  | Direction | Notes                       |
-|----------------|---------|-----------|------------------------------|
-| CLK100MHZ      | E3      | Input     | 100 MHz oscillator           |
-| CPU_RESETN     | C12     | Input     | Active-low reset             |
-| UART_TXD_IN    | C4      | Input     | FTDI TX -> FPGA RX           |
-| UART_RXD_OUT   | D4      | Output    | FPGA TX -> FTDI RX           |
-| LED[15:0]      | H17...  | Output    | GPIO output register         |
-| SW[15:0]       | J15...  | Input     | GPIO input (slide switches)  |
-
-## Compliance
-
-All 37 RV32I user-mode integer instruction tests pass:
-
-```
-add addi and andi auipc beq bge bgeu blt bltu bne
-jal jalr lb lbu lh lhu lui lw or ori
-sb sh sll slli slt slti sltiu sltu sra srai
-srl srli sub sw xor xori
-```
-
-(fence_i excluded — requires instruction cache, not applicable to single-cycle)
-
-## Future Work
-
-- Formal verification (riscv-formal with RVFI interface)
-- Pipeline (5-stage) for higher clock frequency
-- Wait-state support in `wb_master` for slower peripherals
-- Custom accelerator integration (spiking neural network coprocessor)
-- BRAM inference for IMEM/DMEM
+See [`TIER1_ROADMAP.md`](TIER1_ROADMAP.md) for phase gates and details.
 
 ## License
 
