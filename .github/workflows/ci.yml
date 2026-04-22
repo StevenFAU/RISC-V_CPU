@@ -20,7 +20,16 @@ jobs:
 
       - name: Install Verilator
         run: |
-          sudo apt-get update
+          # Force Azure mirror + retries — the default archive.ubuntu.com has
+          # been intermittently stalling on noble-security InRelease, hanging
+          # CI for 60+ min. Azure mirror is in-region for the runner pool.
+          sudo sed -i 's|archive.ubuntu.com|azure.archive.ubuntu.com|g' \
+              /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+              /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          echo 'Acquire::Retries "5";'                       | sudo tee /etc/apt/apt.conf.d/99retries
+          echo 'Acquire::http::Timeout "30";'                | sudo tee -a /etc/apt/apt.conf.d/99retries
+          echo 'Acquire::https::Timeout "30";'               | sudo tee -a /etc/apt/apt.conf.d/99retries
+          for i in 1 2 3; do sudo apt-get update && break || sleep 10; done
           sudo apt-get install -y verilator
           verilator --version
 
@@ -42,7 +51,14 @@ jobs:
 
       - name: Install Icarus Verilog
         run: |
-          sudo apt-get update
+          # See lint job's Install step — same apt hardening.
+          sudo sed -i 's|archive.ubuntu.com|azure.archive.ubuntu.com|g' \
+              /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+              /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          echo 'Acquire::Retries "5";'                       | sudo tee /etc/apt/apt.conf.d/99retries
+          echo 'Acquire::http::Timeout "30";'                | sudo tee -a /etc/apt/apt.conf.d/99retries
+          echo 'Acquire::https::Timeout "30";'               | sudo tee -a /etc/apt/apt.conf.d/99retries
+          for i in 1 2 3; do sudo apt-get update && break || sleep 10; done
           sudo apt-get install -y iverilog
           iverilog -V | head -1
 
@@ -93,7 +109,14 @@ jobs:
 
       - name: Install Icarus Verilog + RISC-V toolchain
         run: |
-          sudo apt-get update
+          # See lint job's Install step — same apt hardening.
+          sudo sed -i 's|archive.ubuntu.com|azure.archive.ubuntu.com|g' \
+              /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+              /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          echo 'Acquire::Retries "5";'                       | sudo tee /etc/apt/apt.conf.d/99retries
+          echo 'Acquire::http::Timeout "30";'                | sudo tee -a /etc/apt/apt.conf.d/99retries
+          echo 'Acquire::https::Timeout "30";'               | sudo tee -a /etc/apt/apt.conf.d/99retries
+          for i in 1 2 3; do sudo apt-get update && break || sleep 10; done
           sudo apt-get install -y iverilog gcc-riscv64-unknown-elf
           iverilog -V | head -1
           riscv64-unknown-elf-gcc --version | head -1
