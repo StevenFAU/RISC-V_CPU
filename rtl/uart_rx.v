@@ -34,6 +34,12 @@ module uart_rx #(
     reg [2:0]  bit_idx;
     reg [7:0]  shift_reg;
 
+    // DEFERRED (Phase 0.3+): same WIDTHEXPAND note as uart_tx — `clk_cnt`
+    // (16 bits) is compared against CLKS_PER_BIT expressions (32 bits).
+    // Safe because CLKS_PER_BIT fits in 16 bits; explicit cast deferred out
+    // of the infrastructure-only Phase 0.3 scope.
+    /* verilator lint_off WIDTHEXPAND */
+
     always @(posedge clk) begin
         if (rst) begin
             state     <= S_IDLE;
@@ -103,5 +109,6 @@ module uart_rx #(
             endcase
         end
     end
+    /* verilator lint_on WIDTHEXPAND */
 
 endmodule

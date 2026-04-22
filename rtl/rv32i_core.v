@@ -179,6 +179,9 @@ module rv32i_core (
         .alu_control(alu_control)
     );
 
+    // ALU zero flag is unused — branch logic evaluates alu_result directly
+    // in the control/PC path, so no zero comparator is wired here.
+    /* verilator lint_off PINCONNECTEMPTY */
     alu u_alu (
         .a(alu_a),
         .b(alu_b),
@@ -186,5 +189,6 @@ module rv32i_core (
         .result(alu_result),
         .zero()
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
 endmodule

@@ -9,15 +9,24 @@ module wb_dmem #(
     parameter INIT_FILE = ""
 )(
     input  wire        clk,
+    // wb_dmem has no state to reset — dmem memory contents come from $readmemh
+    // at elaboration time and write side is not gated by rst.
+    /* verilator lint_off UNUSEDSIGNAL */
     input  wire        rst,
+    /* verilator lint_on UNUSEDSIGNAL */
 
     // Wishbone slave interface
     input  wire        wb_cyc_i,
     input  wire        wb_stb_i,
     input  wire        wb_we_i,
+    // Standard WB slave pattern: address fully decoded by wb_interconnect;
+    // slave only uses the low 16 bits (4 KB DMEM window). Byte selects
+    // ignored — dmem.v uses funct3 sideband instead for byte/half writes.
+    /* verilator lint_off UNUSEDSIGNAL */
     input  wire [31:0] wb_adr_i,
     input  wire [31:0] wb_dat_i,
     input  wire [3:0]  wb_sel_i,
+    /* verilator lint_on UNUSEDSIGNAL */
     output wire [31:0] wb_dat_o,
     output wire        wb_ack_o,
 

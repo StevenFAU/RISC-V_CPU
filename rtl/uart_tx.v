@@ -26,6 +26,13 @@ module uart_tx #(
     reg [2:0]  bit_idx;   // Which data bit (0–7)
     reg [7:0]  shift_reg; // Latched data
 
+    // DEFERRED (Phase 0.3+): the `clk_cnt == CLKS_PER_BIT - 1` comparisons
+    // below mix a 16-bit LHS with a 32-bit RHS expression. Functionally safe
+    // — CLKS_PER_BIT is ~434 at 50 MHz / 115200 and fits in 16 bits — but
+    // the RHS should be cast explicitly. Leaving as-is for now because Phase
+    // 0.3 is scoped to infrastructure (lint + CI), not RTL width cleanups.
+    /* verilator lint_off WIDTHEXPAND */
+
     assign busy = (state != S_IDLE);
 
     always @(posedge clk) begin
@@ -82,5 +89,6 @@ module uart_tx #(
             endcase
         end
     end
+    /* verilator lint_on WIDTHEXPAND */
 
 endmodule

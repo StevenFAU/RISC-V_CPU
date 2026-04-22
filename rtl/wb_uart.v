@@ -18,9 +18,14 @@ module wb_uart #(
     input  wire        wb_cyc_i,
     input  wire        wb_stb_i,
     input  wire        wb_we_i,
+    // Standard WB slave pattern: address fully decoded by wb_interconnect;
+    // slave only uses the register-offset bits (adr_i[3:0]). Byte selects
+    // ignored — word-only slave. Upper data-in bits ignored — 8-bit UART.
+    /* verilator lint_off UNUSEDSIGNAL */
     input  wire [31:0] wb_adr_i,
     input  wire [31:0] wb_dat_i,
     input  wire [3:0]  wb_sel_i,
+    /* verilator lint_on UNUSEDSIGNAL */
     output reg  [31:0] wb_dat_o,
     output wire        wb_ack_o,
 

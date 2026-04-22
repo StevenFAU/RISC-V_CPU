@@ -11,7 +11,11 @@ module imem #(
     parameter SYNC_READ = 0
 )(
     input  wire        clk,
+    // Only addr[$clog2(DEPTH)+1:2] indexes the memory — low 2 bits are the
+    // word alignment and high bits are above the IMEM window.
+    /* verilator lint_off UNUSEDSIGNAL */
     input  wire [31:0] addr,
+    /* verilator lint_on UNUSEDSIGNAL */
     output wire [31:0] instr
 );
 

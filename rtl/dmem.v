@@ -10,7 +10,9 @@ module dmem #(
     // Note: mem_read is accepted but unused — reads are unconditional (combinational).
     // Connected by wb_dmem.v for interface completeness; removing would require
     // changing all instantiation sites for no functional benefit.
+    /* verilator lint_off UNUSEDSIGNAL */
     input  wire        mem_read,
+    /* verilator lint_on UNUSEDSIGNAL */
     input  wire        mem_write,
     input  wire [2:0]  funct3,
     input  wire [31:0] addr,
@@ -30,7 +32,17 @@ module dmem #(
         end
     endgenerate
 
+    // DEFERRED (Phase 0.3+): word_addr could be declared [$clog2(WORDS)-1:0]
+    // to match the 10 bits actually used for indexing, which would drop both
+    // of these waivers. Kept oversized for now to avoid RTL churn during the
+    // infrastructure-only Phase 0.3 scope.
+    //   - WIDTHEXPAND: RHS is 30 bits (addr[31:2]), LHS is 32 bits → zero-extend.
+    //   - UNUSEDSIGNAL: only word_addr[$clog2(WORDS)-1:0] is read by mem[].
+    /* verilator lint_off WIDTHEXPAND */
+    /* verilator lint_off UNUSEDSIGNAL */
     wire [31:0] word_addr = addr[31:2];
+    /* verilator lint_on UNUSEDSIGNAL */
+    /* verilator lint_on WIDTHEXPAND */
     wire [1:0]  byte_off  = addr[1:0];
 
     // Read the full word from memory

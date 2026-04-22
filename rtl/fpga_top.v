@@ -36,11 +36,22 @@ module fpga_top #(
     // =========================================================================
     // Core bus signals
     // =========================================================================
+    // DEFERRED: `imem_addr` (the current-PC flavor of the fetch address) is
+    // dead at the top level — `imem_addr_next` drives the BRAM for the
+    // SYNC_READ=1 path. Keeping the port for now; the core's external
+    // interface is revisited in Phase 4 (pipeline refactor), which is where
+    // the port list trims happen.
+    /* verilator lint_off UNUSEDSIGNAL */
     wire [31:0] imem_addr, imem_addr_next, imem_data;
+    /* verilator lint_on UNUSEDSIGNAL */
     wire [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     wire        dmem_we, dmem_re;
     wire [2:0]  dmem_funct3;
+    // debug_pc / debug_instr are the retirement-trace outputs from the core;
+    // consumed in Phase 3 by the RVFI formal harness. Unwired today.
+    /* verilator lint_off UNUSEDSIGNAL */
     wire [31:0] debug_pc, debug_instr;
+    /* verilator lint_on UNUSEDSIGNAL */
 
     // =========================================================================
     // Wishbone master signals
@@ -88,7 +99,11 @@ module fpga_top #(
     wire [3:0]  wbs3_sel;
     wire [31:0] wbs3_dat_s2m;
     wire        wbs3_ack;
+    // timer_irq is exposed by wb_timer but dangling — Phase 2 wires it into
+    // the core's `irq_timer` input once CSRs + trap logic land in Phase 1.
+    /* verilator lint_off UNUSEDSIGNAL */
     wire        timer_irq;
+    /* verilator lint_on UNUSEDSIGNAL */
 
     // =========================================================================
     // CPU Core
@@ -117,6 +132,7 @@ module fpga_top #(
     // =========================================================================
     // WB_USE_STALL left at its default (0). Phase 4 flips this parameter
     // and wires stall_o into the pipelined core.
+    /* verilator lint_off PINCONNECTEMPTY */
     wb_master u_wb_master (
         .clk(clk),
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
@@ -128,10 +144,14 @@ module fpga_top #(
         .wb_funct3_o(wb_funct3),
         .stall_o(/* unconnected — reserved for Phase 4 pipeline */)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // =========================================================================
     // Wishbone Interconnect
     // =========================================================================
+    // bus_error_o deliberately unconnected here — Phase 1's load/store
+    // access-fault trap is the consumer, per docs/phase0_changelog.md.
+    /* verilator lint_off PINCONNECTEMPTY */
     wb_interconnect u_wb_ic (
         .wbm_cyc_i(wb_cyc), .wbm_stb_i(wb_stb), .wbm_we_i(wb_we),
         .wbm_adr_i(wb_adr), .wbm_dat_i(wb_dat_m2s), .wbm_sel_i(wb_sel),
@@ -157,6 +177,7 @@ module fpga_top #(
         // bus_error_o unconnected — consumed by access-fault trap in Phase 1
         .bus_error_o(/* unconnected */)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // =========================================================================
     // Data Memory (Wishbone Slave 0)
