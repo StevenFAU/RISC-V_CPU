@@ -70,7 +70,10 @@ The previous phase (adding a Wishbone B4 bus fabric with four slave peripherals)
 
 ### 0.3 Verilator Lint + CI ✅ COMPLETE (2026-04-21)
 Commits: `c2e3650` (uart sync-reset), `ab250c6` (wb_gpio sync-reset),
-`273b580` (lint baseline + waivers), `<ci-commit>` (workflow).
+`273b580` (lint baseline + waivers), `2432354` (workflow).
+
+First green run: https://github.com/StevenFAU/RISC-V_CPU/actions/runs/24754596623
+(lint 18s, unit 24s, compliance 1m10s — all three jobs passed on the first push).
 
 Delivered:
 - `verilator --lint-only -Irtl -Wall rtl/*.v` exits 0.

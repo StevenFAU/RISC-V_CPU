@@ -33,7 +33,7 @@ Newest entries at top.
     `ALL PASSED` is treated as a failure. TB `$fatal`-on-failure hardening
     is explicitly deferred (12+ files). Deferred also: C-build CI
     coverage (lands after Phase 0.2).
-  - Commits: `273b580` (lint baseline + waivers), `<ci-commit>` (workflow).
+  - Commits: `273b580` (lint baseline + waivers), `2432354` (workflow).
 
 ## 2026-04-21
 - [docs] Testbench vs hardware memory-map split documented; compliance baseline refreshed
