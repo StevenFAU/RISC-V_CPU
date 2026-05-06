@@ -14,6 +14,7 @@
 `define OP_LUI      7'b0110111  // Load Upper Immediate
 `define OP_AUIPC    7'b0010111  // Add Upper Immediate to PC
 `define OP_CUSTOM0  7'b0001011  // Reserved for future custom accelerator
+`define OP_SYSTEM   7'b1110011  // SYSTEM — CSR ops + ECALL/EBREAK/MRET (0x73)
 
 // ----- funct3 fields -----
 

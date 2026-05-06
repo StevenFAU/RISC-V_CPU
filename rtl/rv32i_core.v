@@ -51,6 +51,15 @@ module rv32i_core (
     wire        alu_src, ctrl_branch, ctrl_jump;
     wire [1:0]  alu_op;
 
+    // Phase 1.1 control outputs — stub-wired in Step 3, consumed in Step 4.
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire        is_csr;
+    wire [2:0]  csr_op;
+    wire        csr_use_imm;
+    wire        illegal_system;
+    wire        illegal_opcode;
+    /* verilator lint_on UNUSEDSIGNAL */
+
     // Branch/Jump resolution
     wire        branch_taken;
     wire [31:0] branch_target, jump_target;
@@ -162,6 +171,7 @@ module rv32i_core (
 
     control u_control (
         .opcode(opcode),
+        .funct3(funct3),
         .reg_write(reg_write),
         .mem_to_reg(mem_to_reg),
         .mem_write(mem_write),
@@ -169,7 +179,12 @@ module rv32i_core (
         .alu_src(alu_src),
         .branch(ctrl_branch),
         .jump(ctrl_jump),
-        .alu_op(alu_op)
+        .alu_op(alu_op),
+        .is_csr(is_csr),
+        .csr_op(csr_op),
+        .csr_use_imm(csr_use_imm),
+        .illegal_system(illegal_system),
+        .illegal_opcode(illegal_opcode)
     );
 
     alu_decoder u_alu_decoder (
