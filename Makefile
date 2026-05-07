@@ -103,6 +103,17 @@ sim-fpga-csr:
 		$(TB_DIR)/tb_fpga_top_csr.v
 	$(VVP) $(SIM_DIR)/tb_fpga_top_csr.vvp
 
+# Run FPGA top-level testbench against the Phase 1.2.0 ecall_test asm program.
+# Needs sim/ecall_test.hex (produced by `make asm PROG=ecall_test`); PASS/FAIL
+# strings inlined into DMEM by the testbench (mirrors sim-fpga-csr layout).
+sim-fpga-ecall:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_ecall.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_ecall.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_ecall.vvp
+
 # Open GTKWave on most recent VCD for a module
 # Usage: make wave MOD=alu
 wave:
@@ -200,4 +211,4 @@ c: $(SW_DIR)/$(PROG).c $(SW_DIR)/crt0.S $(SW_DIR)/syscalls.c $(SW_DIR)/c_link.ld
 clean:
 	rm -rf $(SIM_DIR)/*.vvp $(SIM_DIR)/*.vcd $(SIM_DIR)/*.o $(SIM_DIR)/*.elf $(SIM_DIR)/*.hex
 
-.PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr wave asm c clean
+.PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr sim-fpga-ecall wave asm c clean

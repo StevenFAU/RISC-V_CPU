@@ -1,15 +1,16 @@
-// Integration testbench — rv32i_core + csr_file (Phase 1.1)
+// Integration testbench — rv32i_core + csr_file (Phase 1.1 + 1.2.0)
 //
-// Exercises the SYSTEM-opcode + CSR-instruction integration path. NOT a
-// compliance test — directed, scenario-by-scenario. Each test is a tiny
-// asm sequence (3-7 instructions ending with `j .`) loaded into a unified
-// word-addressed memory; the harness runs for a fixed cycle budget and
-// samples regfile / CSR storage via hierarchical references.
+// Exercises the SYSTEM-opcode + CSR-instruction integration path and the
+// Phase 1.2.0 trap-entry path. NOT a compliance test — directed, scenario-
+// by-scenario. Each test is a tiny asm sequence (3-7 instructions ending
+// with `j .`) loaded into a unified word-addressed memory; the harness
+// runs for a fixed cycle budget and samples regfile / CSR storage via
+// hierarchical references.
 //
 // Test programs are built from typed encoding helpers (enc_addi / enc_lui
 // / enc_csrrw / etc.) so the literal hex never appears in the test bodies.
 //
-// Coverage map (14 directed tests):
+// Coverage map (17 directed tests):
 //   1.  CSRRW round-trip — write 0xDEADBEEF, read back via CSRRS.
 //   2.  CSRRS set        — 0x00FF |= 0xF000 -> 0xF0FF.
 //   3.  CSRRC clear      — 0xF0FF &= ~0x00F0 -> 0xF00F.
@@ -24,6 +25,10 @@
 //   12. CSRRCI zimm=0    — read-only, no write.
 //   13. CSRRC normal     — non-zero rs1 clears bits, rd captures OLD value.
 //   14. CSRRW read+write — rd captures OLD CSR, CSR captures NEW rs1.
+//   15. ECALL trap entry — full check (mepc, mcause, MIE/MPIE, PC redirect,
+//                          instret_tick gate, illegal_inst_o quiet).
+//   16. ECALL with MIE=0 going in — MPIE captures 0 (preserves prior MIE).
+//   17. ECALL with different mtvec value — confirms PC mux selects mtvec_i.
 
 `timescale 1ns/1ps
 `include "defines.v"
@@ -159,6 +164,30 @@ module tb_rv32i_core_csr;
     end
 
     // -------------------------------------------------------------------------
+    // Phase 1.2.0 trap-entry probes:
+    //   seen_trap_enter            — latches on any trap_enter pulse.
+    //   trap_with_instret_observed — latches if trap_enter && instret_tick are
+    //                                ever asserted in the same cycle (must
+    //                                stay 0 — trapping instructions don't
+    //                                retire, see Decision #8 in the 1.2.0
+    //                                handoff).
+    // Both clear on reset (begin_test pulses reset).
+    // -------------------------------------------------------------------------
+    reg seen_trap_enter;
+    reg trap_with_instret_observed;
+    always @(posedge clk) begin
+        if (rst) begin
+            seen_trap_enter            <= 1'b0;
+            trap_with_instret_observed <= 1'b0;
+        end else begin
+            if (trap_enter)
+                seen_trap_enter <= 1'b1;
+            if (trap_enter && instret_tick)
+                trap_with_instret_observed <= 1'b1;
+        end
+    end
+
+    // -------------------------------------------------------------------------
     // Test bookkeeping
     // -------------------------------------------------------------------------
     integer pass_n = 0;
@@ -173,6 +202,11 @@ module tb_rv32i_core_csr;
     localparam [11:0] MINSTRET   = 12'hB02;
     localparam [11:0] MCYCLE     = 12'hB00;
     localparam [11:0] CSR_UNIMPL = 12'h7C0;
+    // Phase 1.2.0 — trap-entry test set
+    localparam [11:0] MSTATUS    = 12'h300;
+    localparam [11:0] MTVEC      = 12'h305;
+    localparam [11:0] MEPC       = 12'h341;
+    localparam [11:0] MCAUSE     = 12'h342;
 
     // -------------------------------------------------------------------------
     // Encoding helpers — typed instruction builders.
@@ -214,6 +248,10 @@ module tb_rv32i_core_csr;
     endfunction
 
     localparam [31:0] HALT = 32'h0000006F;   // J . == JAL x0, 0
+
+    // ECALL encoding: SYSTEM (0x73), funct3=000, imm12=0x000, rs1=0, rd=0.
+    // localparam (not a function) — Verilog-2001 forbids zero-port functions.
+    localparam [31:0] ECALL = 32'h00000073;
 
     // Convenience wrappers
     function [31:0] csrrw;  input [4:0] rd, rs1; input [11:0] csr;
@@ -464,6 +502,81 @@ module tb_rv32i_core_csr;
         run_for_cycles(CYCLES_PER_TEST);
         expect_eq32("x5 = 0x0AA (old)",       u_core.u_regfile.regs[5], 32'h000000AA);
         expect_eq32("mscratch = 0x0BB (new)",  u_csr_file.mscratch_reg,  32'h000000BB);
+
+        // =====================================================================
+        // Phase 1.2.0 — ECALL trap-entry directed tests
+        // =====================================================================
+
+        // ---- TEST 15: ECALL trap entry — full check ----
+        // mtvec = 0x40 (= byte 64, mem[16]). Pre-trap mstatus.MIE = 1.
+        // ECALL at PC=16 (= mem[4]). Expectations:
+        //   mepc          == 0x10 (PC of the ECALL itself)
+        //   mcause        == 0x0B (M-mode environment call, cause code 11)
+        //   mstatus.MIE   == 0    (trap entry cleared MIE)
+        //   mstatus.MPIE  == 1    (captures pre-trap MIE=1)
+        //   debug_pc      == 0x40 (handler — at HALT, looping)
+        //   trap_enter pulsed at least once
+        //   trap_enter && instret_tick never asserted in the same cycle
+        //   illegal_inst_o never pulsed (ECALL is legal in 1.2.0)
+        begin_test("ECALL: trap entry (mepc/mcause/mstatus/PC, instret gate)");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);   // x1 = 0x40 (mtvec target)
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);      // mtvec = 0x40
+        mem[2]  = enc_addi(5'd2, 5'd0, 12'h008);   // x2 = MIE bit (3)
+        mem[3]  = csrrw   (5'd0, 5'd2, MSTATUS);    // mstatus.MIE <- 1
+        mem[4]  = ECALL;                        // PC=0x10 — trap here
+        mem[5]  = HALT;                             // (unreached if trap works)
+        mem[16] = HALT;                             // handler: just halt (no MRET in 1.2.0)
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mepc captures ECALL PC (0x10)",
+                    u_csr_file.mepc_reg,             32'h00000010);
+        expect_eq32("mcause = 0x0B (env call)",
+                    u_csr_file.mcause_reg,           32'h0000000B);
+        expect_bool("mstatus.MIE  cleared to 0",
+                    u_csr_file.mstatus_mie,          1'b0);
+        expect_bool("mstatus.MPIE captured pre-trap MIE=1",
+                    u_csr_file.mstatus_mpie,         1'b1);
+        expect_eq32("PC redirected to mtvec (0x40)",
+                    debug_pc,                        32'h00000040);
+        expect_bool("trap_enter pulsed",
+                    seen_trap_enter,                 1'b1);
+        expect_bool("instret_tick gated on trap-entry cycle",
+                    trap_with_instret_observed,      1'b0);
+        expect_bool("illegal_inst_o quiet (ECALL is legal)",
+                    seen_illegal,                    1'b0);
+
+        // ---- TEST 16: ECALL with MIE=0 going in — MPIE captures 0 ----
+        // Reset gives mstatus.MIE=0; we skip the explicit MIE write.
+        // After trap entry, MPIE should latch 0 (the prior MIE).
+        begin_test("ECALL: pre-trap MIE=0 -> MPIE captures 0");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);      // mtvec = 0x40, MIE stays 0
+        mem[2]  = ECALL;                        // PC=0x08 — trap here
+        mem[3]  = HALT;
+        mem[16] = HALT;                             // handler
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mepc captures ECALL PC (0x08)",
+                    u_csr_file.mepc_reg,             32'h00000008);
+        expect_bool("mstatus.MIE  stays 0",
+                    u_csr_file.mstatus_mie,          1'b0);
+        expect_bool("mstatus.MPIE captured pre-trap MIE=0",
+                    u_csr_file.mstatus_mpie,         1'b0);
+
+        // ---- TEST 17: ECALL with a different mtvec value ----
+        // mtvec = 0x80 (= byte 128, mem[32]). Confirms PC mux selects mtvec_i
+        // rather than a hardwired constant.
+        begin_test("ECALL: PC redirect uses mtvec_i (mtvec=0x80)");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h080);   // x1 = 0x80
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);      // mtvec = 0x80
+        mem[2]  = ECALL;                        // PC=0x08 — trap here
+        mem[3]  = HALT;
+        mem[32] = HALT;                             // handler at 0x80
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("PC redirected to mtvec (0x80)",
+                    debug_pc,                        32'h00000080);
+        expect_eq32("mepc captures ECALL PC (0x08)",
+                    u_csr_file.mepc_reg,             32'h00000008);
+        expect_eq32("mcause = 0x0B (env call)",
+                    u_csr_file.mcause_reg,           32'h0000000B);
 
         // ---- Summary ----
         $display("");
