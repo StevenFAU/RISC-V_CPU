@@ -3,6 +3,120 @@
 Running log of fixes/changes landed during Phase 1 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-05-07 (Phase 1.2.0)
+
+- [feat] Phase 1.2.0 — first sub-phase of the Phase 1.2 trap work. Adds
+  the combinational trap-entry path inside `rv32i_core.v` with ECALL as
+  the only active cause source. Cause priority encoder is built in full
+  skeleton form (all eight sync-cause inputs declared, seven tied
+  `1'b0`). PC-next mux extended to take `mtvec` on trap entry and `mepc`
+  on (dead-pathed) trap return. `csr_file`'s trap inputs become driven
+  by the encoder rather than tied 0 in `fpga_top.v`. EBREAK / illegal /
+  misaligned / bus-error sources land in 1.2.1; MRET in 1.2.2.
+  (commits `6129cd1` + `d37fd54` + `c8275fe`)
+- [rtl] `rtl/rv32i_core.v` —
+  - Inline ECALL decode at the core top level (SYSTEM, funct3=000,
+    imm12=0x000, rs1=0, rd=0). `control.v` stays minimal — the funct12 /
+    rs1 / rd fields are already plumbed at this level, so distinguishing
+    ECALL from other SYSTEM-funct3=0 encodings happens at the use site.
+  - Eight-input cause-priority encoder per Decision 3 from
+    `docs/handoffs/phase1_context.md`: `inst_addr_misaligned >
+    illegal_inst > ebreak > load_addr_misaligned > load_access_fault >
+    store_addr_misaligned > store_access_fault > ecall_m`. Only
+    `ecall_m` driven in 1.2.0; the other seven tied `1'b0` and lit up by
+    1.2.1 input substitutions. Cause code 1 (instruction access fault)
+    intentionally absent — IMEM is internal ROM with no bus error path.
+  - PC-next mux gains two inputs: `mtvec_i` (selected on trap entry,
+    highest priority over branch and jump) and `mepc_i` (dead-pathed on
+    a literal `1'b0` select; 1.2.2 replaces the literal with
+    `trap_return`).
+  - Four new top-level outputs: `trap_enter_o`, `trap_pc_o[31:0]`,
+    `trap_cause_o[31:0]`, `trap_tval_o[31:0]`. Drive `csr_file`'s
+    Phase 1.0 trap interface directly at fpga_top.
+  - `illegal_inst_o` refined: `csr_illegal_i | (illegal_system &
+    ~ecall_m) | illegal_opcode`. ECALL is no longer illegal; EBREAK /
+    MRET / unknown SYSTEM-funct3=0 still pulse it (consumed in 1.2.1 as
+    a cause source).
+  - Side-effect suppression on the trap-entry cycle:
+    `regfile_we`, `dmem_we`, `dmem_re`, `instret_tick_o` all gated on
+    `~trap_enter_w`. For ECALL the first three are structural no-ops
+    (decode already drives those signals to 0 on SYSTEM-funct3=000);
+    the gates are in place for 1.2.1 illegal/misaligned/access-fault
+    sources where the trapping instruction can otherwise touch
+    architectural state. `instret_tick` gating is the only one
+    observable in 1.2.0 verification — a trapping instruction does not
+    retire, so `minstret` must not advance on the trap cycle.
+- [rtl] `rtl/fpga_top.v` — replaces the four tied-0 inputs to
+  `u_csr_file.trap_enter` / `trap_pc` / `trap_cause` / `trap_tval` with
+  the new core ports (via four new internal `core_trap_*` wires).
+  `u_csr_file.trap_return` stays tied `1'b0` (Phase 1.2.2's MRET decode
+  is its consumer). Existing `core_illegal_inst` UNUSEDSIGNAL waiver
+  preserved — `illegal_inst_o` is not consumed in 1.2.0.
+- [rtl] `rtl/csr_file.v` — unchanged (Decision #5 from the 1.2.0
+  handoff: the Phase 1.0 trap interface is exactly the right shape;
+  this sub-phase only drives it).
+- [tb] `tb/tb_rv32i_core_csr.v` — three new directed tests (15-17), 14
+  new individual checks; total 40/40 (was 26/26):
+  - 15: full ECALL trap entry — `mepc` captures ECALL PC, `mcause = 11`,
+    MIE 1->0, MPIE 0->1, PC redirected to `mtvec`, `trap_enter` pulsed,
+    `instret_tick` gated on the trap cycle, `illegal_inst_o` quiet.
+  - 16: ECALL with pre-trap MIE=0 — MPIE captures 0 (preserves prior
+    MIE).
+  - 17: ECALL with `mtvec=0x80` — confirms PC mux selects `mtvec_i`.
+  - Two new probe regs: `seen_trap_enter` and
+    `trap_with_instret_observed` (cleared on reset).
+  - Mirrors `fpga_top` wiring: core trap outputs feed `csr_file` trap
+    inputs (was tied 0 in 1.1).
+  - New `ECALL` localparam (Verilog-2001 forbids zero-port functions).
+- [tb] `tb/tb_compliance.v` + `tb/tb_rv32i_core.v` — port-list updates
+  for the new core trap-entry outputs (left unconnected — neither TB's
+  programs trap).
+- [sw] `sw/ecall_test.S` (new) — minimal end-to-end ECALL trap-entry
+  demo. Sets `mtvec` to a handler within `.text`, sets `mstatus.MIE=1`,
+  executes ECALL, and from the handler verifies `mepc` /
+  `mcause==11` / MIE==0 / MPIE==1 via `csrrs ..., x0`. Prints
+  `PASS\r\n` (or `FAIL\r\n`) over the same UART path `csr_test.S` uses.
+  Halts at the end — does NOT MRET (Phase 1.2.2).
+- [tb] `tb/tb_fpga_top_ecall.v` (new) — duplicate-and-rename of
+  `tb_fpga_top_csr.v` for the ecall_test program. Loads
+  `sim/ecall_test.hex`, preloads PASS/FAIL strings into DMEM, captures
+  6 UART bytes, expects `PASS\r\n`.
+- [build] `Makefile` — new `sim-fpga-ecall` target, mirroring
+  `sim-fpga-csr`.
+- [ci] `.github/workflows/ci.yml` — `fpga_top_ecall` added to the
+  unit-TB skip list (firmware-dependent, like `fpga_top_asm` /
+  `fpga_top_c` / `fpga_top_csr`). `tb_rv32i_core_csr` is self-contained
+  and remains in the auto-pickup path.
+
+### Verification
+- `verilator --lint-only -Irtl -Wall --top-module fpga_top rtl/*.v`:
+  clean. No new persistent lint waivers. The Phase 1.1 UNUSEDSIGNAL
+  waiver on `mtvec_i` / `mepc_i` in `rv32i_core.v` is gone (both feed
+  the PC mux now); `mstatus_mie_i` keeps its waiver until Phase 2
+  interrupts.
+- `make sim MOD=rv32i_core_csr`: 40/40 PASS, "ALL TESTS PASSED" (was
+  26/26 in 1.1).
+- `make sim MOD=csr_file`: 63/63 PASS (Phase 1.0 unchanged).
+- `make sim MOD=control`: 24/24 PASS.
+- All 18 CI-eligible unit testbenches: PASS, no regression.
+- `cd tests && make run-all`: 37/37 PASS, all 37 cycle counts
+  byte-identical to `phase1.1-complete` after each of the three RTL/TB
+  commits — the load-bearing check for this sub-phase, since no rv32ui
+  test fires ECALL or any synchronous trap.
+- `make sim-fpga-ecall` with `sw/ecall_test.S`: PASS, `PASS\r\n`
+  received end-to-end through the full SoC path; the testbench prints
+  `*** ECALL FPGA TEST PASSED -- "PASS\r\n" received correctly ***`.
+
+### Phase 1.0 / 1.1 interface validation, second pass
+The trap interface that Phase 1.0 baked in (`trap_enter` / `trap_pc` /
+`trap_cause` / `trap_tval` / `trap_return`, with internal priority
+`trap_enter > trap_return > csr_write_op` on every CSR with multiple
+writers) consumed all four sync-trap-entry signals from 1.2.0's encoder
+without modification. Same for the 1.1 port list on `rv32i_core` —
+`mtvec_i` / `mepc_i` were already routed through, and lighting them up
+in 1.2.0 was a literal-tie -> live-signal swap on the PC mux. The "design
+for all consumers at module creation" principle held a second time.
+
 ## 2026-05-06 (Phase 1.1)
 
 - [feat] Phase 1.1 — SYSTEM opcode decode + CSR-instruction integration
