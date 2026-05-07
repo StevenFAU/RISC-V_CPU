@@ -148,6 +148,43 @@ sim-fpga-misaligned:
 		$(TB_DIR)/tb_fpga_top_misaligned.v
 	$(VVP) $(SIM_DIR)/tb_fpga_top_misaligned.vvp
 
+# Run FPGA top-level testbench against the Phase 1.2.2 misaligned_load_test
+# asm program. Exercises LH-at-odd-half-word -> cause 4 trap; pre-issue
+# gate suppresses dmem_re. Needs sim/misaligned_load_test.hex
+# (`make asm PROG=misaligned_load_test`).
+sim-fpga-misaligned-load:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_misaligned_load.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_misaligned_load.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_misaligned_load.vvp
+
+# Run FPGA top-level testbench against the Phase 1.2.2 misaligned_store_test
+# asm program. Exercises SH-at-odd-half-word -> cause 6 trap with
+# observable dmem_we gate (sentinel preservation). Needs
+# sim/misaligned_store_test.hex (`make asm PROG=misaligned_store_test`).
+sim-fpga-misaligned-store:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_misaligned_store.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_misaligned_store.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_misaligned_store.vvp
+
+# Run FPGA top-level testbench against the Phase 1.2.2 access_fault_test
+# asm program. Exercises LW-from-unmapped-address (0xF0000000) -> cause 5
+# at-issue trap; bus_error_o flows from wb_interconnect through the core's
+# new bus_error_i port. Needs sim/access_fault_test.hex
+# (`make asm PROG=access_fault_test`).
+sim-fpga-access-fault:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_access_fault.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_access_fault.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_access_fault.vvp
+
 # Open GTKWave on most recent VCD for a module
 # Usage: make wave MOD=alu
 wave:
@@ -247,4 +284,5 @@ clean:
 
 .PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr sim-fpga-ecall \
         sim-fpga-ebreak sim-fpga-illegal sim-fpga-misaligned \
+        sim-fpga-misaligned-load sim-fpga-misaligned-store sim-fpga-access-fault \
         wave asm c clean

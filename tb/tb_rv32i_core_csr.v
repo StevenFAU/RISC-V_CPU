@@ -145,6 +145,37 @@ module tb_rv32i_core_csr;
         end
     end
 
+    // Width-aware DMEM write path. Only fires when the GATED dmem_we is
+    // asserted, so a trapping store leaves storage untouched. Misaligned
+    // SH/SB encodings model the would-be write that the gate must
+    // suppress: if the gate were broken, a misaligned SH at addr=odd
+    // would update tb_dmem at that index and the sentinel test below
+    // would catch it.
+    integer dmem_idx;
+    always @(posedge clk) begin
+        if (dmem_we) begin
+            dmem_idx = dmem_addr[31:2] & (DMEM_WORDS-1);
+            case (dmem_funct3)
+                3'b010: tb_dmem[dmem_idx] <= dmem_wdata;       // SW
+                3'b001: begin                                   // SH
+                    if (dmem_addr[1] == 1'b0)
+                        tb_dmem[dmem_idx][15:0]  <= dmem_wdata[15:0];
+                    else
+                        tb_dmem[dmem_idx][31:16] <= dmem_wdata[15:0];
+                end
+                3'b000: begin                                   // SB
+                    case (dmem_addr[1:0])
+                        2'b00: tb_dmem[dmem_idx][ 7: 0] <= dmem_wdata[7:0];
+                        2'b01: tb_dmem[dmem_idx][15: 8] <= dmem_wdata[7:0];
+                        2'b10: tb_dmem[dmem_idx][23:16] <= dmem_wdata[7:0];
+                        2'b11: tb_dmem[dmem_idx][31:24] <= dmem_wdata[7:0];
+                    endcase
+                end
+                default: ;
+            endcase
+        end
+    end
+
     // -------------------------------------------------------------------------
     // DUT — core
     // -------------------------------------------------------------------------
@@ -350,6 +381,37 @@ module tb_rv32i_core_csr;
         input [4:0]  rs2;
         input [12:0] imm;
         begin beq = enc_branch(rs1, rs2, 3'b000, imm); end
+    endfunction
+
+    // I-type LOAD encoder. funct3 selects width (000=LB, 001=LH, 010=LW,
+    // 100=LBU, 101=LHU). imm is 12-bit signed offset.
+    function [31:0] enc_load;
+        input [4:0]  rd;
+        input [4:0]  rs1;
+        input [2:0]  funct3;
+        input [11:0] imm;
+        begin enc_load = {imm, rs1, funct3, rd, 7'b0000011}; end
+    endfunction
+    function [31:0] lh;  input [4:0] rd, rs1; input [11:0] imm;
+        begin lh  = enc_load(rd, rs1, 3'b001, imm); end
+    endfunction
+    function [31:0] lw;  input [4:0] rd, rs1; input [11:0] imm;
+        begin lw  = enc_load(rd, rs1, 3'b010, imm); end
+    endfunction
+
+    // S-type STORE encoder. funct3 selects width (000=SB, 001=SH, 010=SW).
+    function [31:0] enc_store;
+        input [4:0]  rs1;
+        input [4:0]  rs2;
+        input [2:0]  funct3;
+        input [11:0] imm;
+        begin enc_store = {imm[11:5], rs2, rs1, funct3, imm[4:0], 7'b0100011}; end
+    endfunction
+    function [31:0] sh;  input [4:0] rs1, rs2; input [11:0] imm;
+        begin sh  = enc_store(rs1, rs2, 3'b001, imm); end
+    endfunction
+    function [31:0] sw;  input [4:0] rs1, rs2; input [11:0] imm;
+        begin sw  = enc_store(rs1, rs2, 3'b010, imm); end
     endfunction
 
     // Convenience wrappers
@@ -885,6 +947,245 @@ module tb_rv32i_core_csr;
                     u_csr_file.mepc_reg,             32'h00000000);
         expect_eq32("mcause unchanged (still 0)",
                     u_csr_file.mcause_reg,           32'h00000000);
+
+        // =====================================================================
+        // Phase 1.2.2 — load/store misalignment + access-fault tests
+        // =====================================================================
+
+        // ---- TEST 25: load_addr_misaligned via LH at odd address ----
+        // mtvec=0x40, x1=0x01 (odd half-word addr), LH x5,0(x1) -> addr=1.
+        // Pre-issue trap: dmem_re must NOT assert; trap mtval = 0x01.
+        begin_test("load_addr_misaligned: LH at addr[0]=1");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);       // mtvec = 0x40
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h001);     // x1 = 0x01
+        mem[3]  = lh      (5'd5, 5'd1, 12'h000);     // PC=0x0C, addr=0x01
+        mem[4]  = HALT;
+        mem[16] = HALT;                              // handler at 0x40
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mepc captures LH PC (0x0C)",
+                    u_csr_file.mepc_reg,             32'h0000000C);
+        expect_eq32("mcause = 0x04 (load_addr_misaligned)",
+                    u_csr_file.mcause_reg,           32'h00000004);
+        expect_eq32("mtval = misaligned addr (0x01)",
+                    u_csr_file.mtval_reg,            32'h00000001);
+        expect_bool("dmem_re never asserted (pre-issue gate)",
+                    seen_dmem_re,                    1'b0);
+        expect_eq32("PC redirected to mtvec (0x40)",
+                    debug_pc,                        32'h00000040);
+        expect_bool("trap_enter pulsed",
+                    seen_trap_enter,                 1'b1);
+
+        // ---- TEST 26: load_addr_misaligned via LW addr[1:0]=01 ----
+        begin_test("load_addr_misaligned: LW at addr[1:0]=01");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h005);     // x1 = 0x05
+        mem[3]  = lw      (5'd5, 5'd1, 12'h000);     // PC=0x0C, addr=0x05
+        mem[4]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mcause = 0x04",
+                    u_csr_file.mcause_reg,           32'h00000004);
+        expect_eq32("mtval = 0x05",
+                    u_csr_file.mtval_reg,            32'h00000005);
+        expect_bool("dmem_re never asserted",
+                    seen_dmem_re,                    1'b0);
+
+        // ---- TEST 27: load_addr_misaligned via LW addr[1:0]=10 ----
+        begin_test("load_addr_misaligned: LW at addr[1:0]=10");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h006);     // x1 = 0x06
+        mem[3]  = lw      (5'd5, 5'd1, 12'h000);
+        mem[4]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mcause = 0x04",
+                    u_csr_file.mcause_reg,           32'h00000004);
+        expect_eq32("mtval = 0x06",
+                    u_csr_file.mtval_reg,            32'h00000006);
+        expect_bool("dmem_re never asserted",
+                    seen_dmem_re,                    1'b0);
+
+        // ---- TEST 28: load_addr_misaligned via LW addr[1:0]=11 ----
+        begin_test("load_addr_misaligned: LW at addr[1:0]=11");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h007);     // x1 = 0x07
+        mem[3]  = lw      (5'd5, 5'd1, 12'h000);
+        mem[4]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mcause = 0x04",
+                    u_csr_file.mcause_reg,           32'h00000004);
+        expect_eq32("mtval = 0x07",
+                    u_csr_file.mtval_reg,            32'h00000007);
+        expect_bool("dmem_re never asserted",
+                    seen_dmem_re,                    1'b0);
+
+        // ---- TEST 29: store_addr_misaligned via SH at odd addr +
+        //                 dmem_we gate observability via sentinel ----
+        // Pre-load tb_dmem[5] (= aligned addr 0x14) with sentinel
+        // 0xCAFEBABE. Issue SH x?, 0(x1) where x1=0x15 (odd). If the
+        // pre-issue gate were broken, dmem_we would assert and the SH
+        // logic would write the lower 16 bits of x? into tb_dmem[5][15:0]
+        // — corrupting the sentinel. With the gate intact, dmem_we stays
+        // 0 and tb_dmem[5] retains 0xCAFEBABE.
+        begin_test("store_addr_misaligned: SH at addr[0]=1 + sentinel preserved");
+        tb_dmem[5] = 32'hCAFEBABE;                   // sentinel at addr 0x14
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h015);     // x1 = 0x15 (odd)
+        mem[3]  = enc_addi(5'd2, 5'd0, 12'h234);     // x2 = 0x234 (would-be data)
+        mem[4]  = sh      (5'd1, 5'd2, 12'h000);     // PC=0x10, SH x2,0(x1)
+        mem[5]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mepc captures SH PC (0x10)",
+                    u_csr_file.mepc_reg,             32'h00000010);
+        expect_eq32("mcause = 0x06 (store_addr_misaligned)",
+                    u_csr_file.mcause_reg,           32'h00000006);
+        expect_eq32("mtval = misaligned addr (0x15)",
+                    u_csr_file.mtval_reg,            32'h00000015);
+        expect_bool("dmem_we never asserted (pre-issue gate)",
+                    seen_dmem_we,                    1'b0);
+        expect_eq32("tb_dmem[5] sentinel preserved",
+                    tb_dmem[5],                      32'hCAFEBABE);
+
+        // ---- TEST 30: store_addr_misaligned via SW addr[1:0]=01 ----
+        begin_test("store_addr_misaligned: SW at addr[1:0]=01");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h019);     // x1 = 0x19
+        mem[3]  = enc_addi(5'd2, 5'd0, 12'h0AA);
+        mem[4]  = sw      (5'd1, 5'd2, 12'h000);
+        mem[5]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mcause = 0x06",
+                    u_csr_file.mcause_reg,           32'h00000006);
+        expect_eq32("mtval = 0x19",
+                    u_csr_file.mtval_reg,            32'h00000019);
+        expect_bool("dmem_we never asserted",
+                    seen_dmem_we,                    1'b0);
+
+        // ---- TEST 31: store_addr_misaligned via SW addr[1:0]=10 ----
+        begin_test("store_addr_misaligned: SW at addr[1:0]=10");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h01A);
+        mem[3]  = enc_addi(5'd2, 5'd0, 12'h0BB);
+        mem[4]  = sw      (5'd1, 5'd2, 12'h000);
+        mem[5]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mcause = 0x06",
+                    u_csr_file.mcause_reg,           32'h00000006);
+        expect_eq32("mtval = 0x1A",
+                    u_csr_file.mtval_reg,            32'h0000001A);
+        expect_bool("dmem_we never asserted",
+                    seen_dmem_we,                    1'b0);
+
+        // ---- TEST 32: store_addr_misaligned via SW addr[1:0]=11 ----
+        begin_test("store_addr_misaligned: SW at addr[1:0]=11");
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_addi(5'd1, 5'd0, 12'h01B);
+        mem[3]  = enc_addi(5'd2, 5'd0, 12'h0CC);
+        mem[4]  = sw      (5'd1, 5'd2, 12'h000);
+        mem[5]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mcause = 0x06",
+                    u_csr_file.mcause_reg,           32'h00000006);
+        expect_eq32("mtval = 0x1B",
+                    u_csr_file.mtval_reg,            32'h0000001B);
+        expect_bool("dmem_we never asserted",
+                    seen_dmem_we,                    1'b0);
+
+        // ---- TEST 33: load_access_fault via LW to unmapped address ----
+        // Bus-error mock window covers 0xF0000000-0xF000FFFF. LW to an
+        // aligned address inside the window: dmem_re fires (not gated by
+        // pre_issue), bus_error_i pulses, cause-5 trap fires same cycle,
+        // regfile destination preserved by the latch-side gate.
+        begin_test("load_access_fault: LW to unmapped addr 0xF0000000");
+        bus_err_active = 1'b1;
+        bus_err_lo     = 32'hF000_0000;
+        bus_err_hi     = 32'hF000_FFFF;
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_lui (5'd5, 20'hCAFEB);          // x5 sentinel = 0xCAFEB000
+        mem[3]  = enc_lui (5'd1, 20'hF0000);          // x1 = 0xF0000000
+        mem[4]  = lw      (5'd5, 5'd1, 12'h000);     // PC=0x10, would clobber x5
+        mem[5]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mepc captures LW PC (0x10)",
+                    u_csr_file.mepc_reg,             32'h00000010);
+        expect_eq32("mcause = 0x05 (load_access_fault)",
+                    u_csr_file.mcause_reg,           32'h00000005);
+        expect_eq32("mtval = unmapped addr (0xF0000000)",
+                    u_csr_file.mtval_reg,            32'hF0000000);
+        expect_eq32("x5 sentinel preserved (regfile_we gate)",
+                    u_core.u_regfile.regs[5],        32'hCAFEB000);
+        expect_eq32("PC redirected to mtvec (0x40)",
+                    debug_pc,                        32'h00000040);
+        expect_bool("trap_enter pulsed",
+                    seen_trap_enter,                 1'b1);
+
+        // ---- TEST 34: store_access_fault via SW to unmapped address ----
+        begin_test("store_access_fault: SW to unmapped addr 0xF0000000");
+        bus_err_active = 1'b1;
+        bus_err_lo     = 32'hF000_0000;
+        bus_err_hi     = 32'hF000_FFFF;
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_lui (5'd1, 20'hF0000);          // x1 = 0xF0000000
+        mem[3]  = enc_addi(5'd2, 5'd0, 12'h0DD);
+        mem[4]  = sw      (5'd1, 5'd2, 12'h000);     // PC=0x10
+        mem[5]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mepc captures SW PC (0x10)",
+                    u_csr_file.mepc_reg,             32'h00000010);
+        expect_eq32("mcause = 0x07 (store_access_fault)",
+                    u_csr_file.mcause_reg,           32'h00000007);
+        expect_eq32("mtval = unmapped addr (0xF0000000)",
+                    u_csr_file.mtval_reg,            32'hF0000000);
+        expect_eq32("PC redirected to mtvec (0x40)",
+                    debug_pc,                        32'h00000040);
+        expect_bool("trap_enter pulsed",
+                    seen_trap_enter,                 1'b1);
+
+        // ---- TEST 35: mutual exclusion — misaligned LW to unmapped addr ----
+        // x1 = 0xF0000001 — both misaligned (addr[1:0]=01) and unmapped.
+        // Pre-issue gate suppresses dmem_re; bus_error_i doesn't even
+        // fire on this cycle; encoder priority would prefer cause 4 over
+        // cause 5 in any event. mcause must be 4, not 5. Implicit
+        // combinational-cycle smoke test: a successful run with the
+        // expected cause-4 outcome (no oscillation, no hang) confirms
+        // the loop-break worked.
+        begin_test("mutex: misaligned LW to unmapped addr -> cause 4 wins");
+        bus_err_active = 1'b1;
+        bus_err_lo     = 32'hF000_0000;
+        bus_err_hi     = 32'hFFFF_FFFF;
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        mem[2]  = enc_lui (5'd1, 20'hF0000);
+        mem[3]  = enc_addi(5'd1, 5'd1, 12'h001);     // x1 = 0xF0000001
+        mem[4]  = lw      (5'd5, 5'd1, 12'h000);     // PC=0x10
+        mem[5]  = HALT;
+        mem[16] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("mcause = 0x04 (misalignment wins, NOT 0x05)",
+                    u_csr_file.mcause_reg,           32'h00000004);
+        expect_eq32("mtval = the misaligned/unmapped addr (0xF0000001)",
+                    u_csr_file.mtval_reg,            32'hF0000001);
+        expect_bool("dmem_re never asserted (pre-issue gate)",
+                    seen_dmem_re,                    1'b0);
+        expect_bool("trap_enter pulsed",
+                    seen_trap_enter,                 1'b1);
 
         // ---- Summary ----
         $display("");
