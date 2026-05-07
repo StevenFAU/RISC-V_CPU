@@ -9,20 +9,39 @@
 //     into the external csr_file, and routes csr_read_data_i back through a
 //     new (5th) source on the writeback mux.
 //
-//   * illegal_inst_o = csr_illegal_i | illegal_system | illegal_opcode.
-//     Phase 1.1 leaves this output unconnected at fpga_top; Phase 1.2's
-//     trap FSM consumes it.
+// Phase 1.2.0 adds the trap-entry skeleton:
+//
+//   * Cause priority encoder built in full skeleton form — all eight sync-
+//     cause inputs declared, only `ecall_m` driven this sub-phase. The
+//     remaining seven are tied 1'b0 here and lit up in 1.2.1 by replacing
+//     the literal-zero ties with the real signal sources, with no encoder
+//     restructuring.
+//
+//   * ECALL is decoded inline at this top level (SYSTEM, funct3=0,
+//     imm12=0x000, rs1=0, rd=0). Decision #9 from the Phase 1.2.0 handoff:
+//     ECALL is removed from `illegal_inst_o`; EBREAK / MRET / unknown
+//     SYSTEM-funct3=0 encodings stay illegal until 1.2.1 / 1.2.2 take
+//     over.
+//
+//   * Encoder outputs (`trap_enter` / `trap_pc` / `trap_cause` /
+//     `trap_tval`) are NOT yet routed to the PC mux or up to fpga_top in
+//     this Step-1 commit — Step 2 of the sub-phase plumbs them. Internal
+//     wires sit under a temporary UNUSEDSIGNAL waiver until then.
+//
+// Carried-forward Phase 1.1 notes:
+//
+//   * illegal_inst_o = csr_illegal_i | (illegal_system & !ecall_m) |
+//     illegal_opcode. ECALL no longer fires the illegal path; EBREAK /
+//     MRET / unknown SYSTEM-funct3=0 still do.
 //
 //   * instret_tick_o = !rst — single-cycle core retires every non-reset
-//     cycle. Phase 1.2 may refine to gate on !illegal_inst once the trap
-//     path materializes (so trapped cycles don't double-count as retires).
+//     cycle. Phase 1.2.0 Step 2 gates this on `!trap_enter` so a trapping
+//     instruction does not retire.
 //
 //   * mtvec_i / mepc_i / mstatus_mie_i are inputs from csr_file, plumbed
 //     through the core's port list now per the "designed for all
 //     consumers" principle even though Phase 1.1 doesn't read them. Phase
-//     1.2's PC-redirect mux lives inside the core, so adding the ports
-//     here in 1.1 avoids a port-list churn when the trap FSM lands.
-//     The lint_off UNUSEDSIGNAL waivers around them mark this intent.
+//     1.2.0 Step 2's PC-redirect mux is the consumer.
 
 `include "defines.v"
 
@@ -64,7 +83,8 @@ module rv32i_core (
     output wire        illegal_inst_o,
 
     // Trap-related CSR outputs from csr_file, routed through for Phase 1.2's
-    // PC-redirect mux. Tied unused in 1.1.
+    // PC-redirect mux. Tied unused in 1.1; Step 2 of 1.2.0 lights up
+    // mtvec_i. mepc_i lights up at 1.2.2's MRET, mstatus_mie_i at Phase 2.
     /* verilator lint_off UNUSEDSIGNAL */
     input  wire [31:0] mtvec_i,
     input  wire [31:0] mepc_i,
@@ -225,18 +245,87 @@ module rv32i_core (
                                             alu_result;
 
     // =========================================================================
+    // Phase 1.2.0 — ECALL decode + cause-priority encoder (skeleton)
+    // =========================================================================
+    // ECALL: SYSTEM (opcode 0x73), funct3=000, imm12=0x000, rs1=0, rd=0.
+    // Decoded inline here rather than threading another funct12-aware path
+    // through control.v: control.v already collapses funct3=000 into
+    // illegal_system, and the rs1/rd/imm12 fields are already plumbed at
+    // this level. EBREAK (imm12=0x001) and MRET (imm12=0x302) stay illegal
+    // until 1.2.1 / 1.2.2 take them over.
+    wire ecall_m = (opcode == `OP_SYSTEM)
+                && (funct3 == 3'b000)
+                && (csr_addr_f == 12'h000)
+                && (rs1_addr == 5'b0)
+                && (rd_addr == 5'b0);
+
+    // Cause-priority encoder inputs — all eight declared per the "design
+    // for all consumers at module creation" principle. Only ecall_m drives
+    // a real signal in 1.2.0; the rest are tied 1'b0 and lit up in 1.2.1
+    // by replacing the literal-zero ties with the real signal sources.
+    // Cause codes match RISC-V Privileged spec; priority order also matches
+    // (highest to lowest in the encoder's if/else chain below).
+    wire trap_inst_addr_misaligned  = 1'b0;  // 1.2.1: branch/jump target [1:0] != 0
+    wire trap_illegal_inst          = 1'b0;  // 1.2.1: from illegal_inst_o
+    wire trap_ebreak                = 1'b0;  // 1.2.1: SYSTEM funct3=0 imm12=0x001
+    wire trap_load_addr_misaligned  = 1'b0;  // 1.2.1: LH addr[0] | LW addr[1:0]
+    wire trap_load_access_fault     = 1'b0;  // 1.2.1: bus_error_o & load
+    wire trap_store_addr_misaligned = 1'b0;  // 1.2.1: SH/SW analogous
+    wire trap_store_access_fault    = 1'b0;  // 1.2.1: bus_error_o & store
+    wire trap_ecall_m               = ecall_m;
+
+    // Combinational priority encoder. Lowest-index cause wins, matching
+    // Decision 3 from docs/handoffs/phase1_context.md (RISC-V spec order).
+    reg        trap_enter_w;
+    reg [3:0]  trap_cause_code;
+    always @(*) begin
+        trap_enter_w    = 1'b1;
+        if      (trap_inst_addr_misaligned)  trap_cause_code = 4'd0;
+        else if (trap_illegal_inst)          trap_cause_code = 4'd2;
+        else if (trap_ebreak)                trap_cause_code = 4'd3;
+        else if (trap_load_addr_misaligned)  trap_cause_code = 4'd4;
+        else if (trap_load_access_fault)     trap_cause_code = 4'd5;
+        else if (trap_store_addr_misaligned) trap_cause_code = 4'd6;
+        else if (trap_store_access_fault)    trap_cause_code = 4'd7;
+        else if (trap_ecall_m)               trap_cause_code = 4'd11;
+        else begin
+            trap_cause_code = 4'd0;
+            trap_enter_w    = 1'b0;
+        end
+    end
+
+    // Encoder outputs. csr_file masks trap_pc[1:0] internally on the mepc
+    // write, so passing the raw current PC is correct.
+    wire [31:0] trap_cause_w = {28'b0, trap_cause_code};
+    wire [31:0] trap_tval_w  = 32'b0;          // ECALL/EBREAK have tval=0
+    wire [31:0] trap_pc_w    = pc_current;
+
+    // Step 1 of 1.2.0: encoder outputs are computed but not yet consumed.
+    // Step 2 routes them into the PC-mux and up to fpga_top, at which
+    // point this waiver block goes away.
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire        trap_enter_unused = trap_enter_w;
+    wire [31:0] trap_pc_unused    = trap_pc_w;
+    wire [31:0] trap_cause_unused = trap_cause_w;
+    wire [31:0] trap_tval_unused  = trap_tval_w;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    // =========================================================================
     // Phase 1.1 — illegal-instruction detection + retirement tick
     // =========================================================================
     // illegal_inst_o is the OR of:
     //   * csr_illegal_i  — CSR-file detected RO write or unimplemented addr
-    //   * illegal_system — SYSTEM-opcode placeholder (ECALL/EBREAK/MRET/WFI)
+    //   * illegal_system — SYSTEM funct3=0 (ECALL/EBREAK/MRET/WFI), MASKED
+    //     by ecall_m so legal ECALLs no longer raise illegal. EBREAK / MRET
+    //     / unknown SYSTEM-funct3=0 encodings still pulse illegal here
+    //     until 1.2.1 / 1.2.2 take them over.
     //   * illegal_opcode — unrecognized opcode at the decoder default branch
-    // Unconnected at fpga_top in 1.1; Phase 1.2's trap FSM consumes it.
-    assign illegal_inst_o = csr_illegal_i | illegal_system | illegal_opcode;
+    // Unconnected at fpga_top in 1.1/1.2.0; 1.2.1 wires it in as a cause
+    // source on the trap encoder.
+    assign illegal_inst_o = csr_illegal_i | (illegal_system & ~ecall_m) | illegal_opcode;
 
-    // Single-cycle core retires every non-reset cycle. Phase 1.2 may gate
-    // this on !illegal_inst once the trap path can suppress retirement of
-    // a faulting instruction.
+    // Single-cycle core retires every non-reset cycle. Step 2 of 1.2.0
+    // gates this on !trap_enter so a trapping instruction does not retire.
     assign instret_tick_o = !rst;
 
     // =========================================================================
