@@ -106,13 +106,34 @@ module fpga_top #(
     /* verilator lint_on UNUSEDSIGNAL */
 
     // =========================================================================
+    // CSR File ↔ Core interface (Phase 1.1)
+    // =========================================================================
+    // Decoder side (core → csr_file):
+    wire [11:0] core_csr_addr;
+    wire        core_csr_read_en;
+    wire [2:0]  core_csr_write_op;
+    wire [31:0] core_csr_write_data;
+    // Read-back + illegal (csr_file → core):
+    wire [31:0] csr_read_data;
+    wire        csr_illegal;
+    // Retirement (core → csr_file):
+    wire        core_instret_tick;
+    // Trap-related outputs (csr_file → core), routed through the core's port
+    // list per Decision D1. Phase 1.1 doesn't consume them; Phase 1.2's trap
+    // FSM (PC-redirect mux) does.
+    wire [31:0] csr_mtvec;
+    wire [31:0] csr_mepc;
+    wire        csr_mstatus_mie;
+    // illegal_inst_o from core: dangling here in Phase 1.1 (Phase 1.2 wires
+    // it into the trap-entry FSM).
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire        core_illegal_inst;
+    /* verilator lint_on UNUSEDSIGNAL */
+    // mstatus_o from csr_file is debug visibility only — leave unconnected.
+
+    // =========================================================================
     // CPU Core
     // =========================================================================
-    // Phase 1.1: the core's CSR-file interface ports are stubbed off here.
-    // Step 5 of the Phase 1.1 handoff replaces these stubs with the real
-    // csr_file instantiation and wiring. Until then, rv32ui programs run
-    // unchanged because no CSR instructions execute.
-    /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core u_core (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
@@ -120,14 +141,50 @@ module fpga_top #(
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),
-        // CSR interface — stubs replaced by csr_file instantiation in Step 5
-        .csr_addr_o(), .csr_read_en_o(),
-        .csr_write_op_o(), .csr_write_data_o(),
-        .csr_read_data_i(32'd0), .csr_illegal_i(1'b0),
-        .instret_tick_o(),
-        .illegal_inst_o(),
-        .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
+        // CSR interface
+        .csr_addr_o(core_csr_addr),
+        .csr_read_en_o(core_csr_read_en),
+        .csr_write_op_o(core_csr_write_op),
+        .csr_write_data_o(core_csr_write_data),
+        .csr_read_data_i(csr_read_data),
+        .csr_illegal_i(csr_illegal),
+        .instret_tick_o(core_instret_tick),
+        .illegal_inst_o(core_illegal_inst),
+        .mtvec_i(csr_mtvec),
+        .mepc_i(csr_mepc),
+        .mstatus_mie_i(csr_mstatus_mie),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
+    );
+
+    // =========================================================================
+    // CSR File (Phase 1.1)
+    // =========================================================================
+    // Trap entry/exit are tied 0 in 1.1; Phase 1.2's trap FSM drives them.
+    // mstatus_o is debug-only; leave unconnected.
+    /* verilator lint_off PINCONNECTEMPTY */
+    csr_file u_csr_file (
+        .clk(clk), .rst(rst),
+        // Instruction-driven access from core
+        .csr_addr(core_csr_addr),
+        .csr_read_en(core_csr_read_en),
+        .csr_write_op(core_csr_write_op),
+        .csr_write_data(core_csr_write_data),
+        .csr_read_data(csr_read_data),
+        .csr_illegal(csr_illegal),
+        // Trap entry/return — Phase 1.2
+        .trap_enter(1'b0),
+        .trap_pc(32'd0),
+        .trap_cause(32'd0),
+        .trap_tval(32'd0),
+        .trap_return(1'b0),
+        // Retirement tick from core
+        .instret_tick(core_instret_tick),
+        // Outputs to core (consumed by Phase 1.2 PC-redirect mux)
+        .mtvec_o(csr_mtvec),
+        .mepc_o(csr_mepc),
+        .mstatus_mie_o(csr_mstatus_mie),
+        // Debug visibility — unused at fpga_top
+        .mstatus_o()
     );
     /* verilator lint_on PINCONNECTEMPTY */
 
