@@ -180,12 +180,14 @@ Original scope retained here for historical reference:
 - `time`/`timeh` (CSR addresses 0xC01/0xC81) deliberately deferred — see `docs/tech_debt.md`. MMIO read of `wb_timer.mtime_lo/hi` from software is already the spec-compliant alternative.
 - Self-checking `tb/tb_csr_file.v` covers reset values, write masks, RO rejects, CSRRS/CSRRC, counter behavior, trap entry, MRET, and the priority chain.
 
-### 1.1 Wire CSR-instruction decode into the core
-- Decode the CSR subset of the `SYSTEM` opcode (0x73, funct3 != 0): CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI.
-- Route `csr_addr/csr_read_en/csr_write_op/csr_write_data` from `control.v` to `csr_file.v`. For the immediate forms (CSRRWI/CSRRSI/CSRRCI), the source is the zero-extended 5-bit `rs1` field of the instruction.
-- Drive `instret_tick` from the core's retirement signal (1/cycle on this single-cycle core; will need gating once the pipeline can stall in Phase 4).
-- Writeback path: CSR reads become a new source for `rd_data` selected by the CSR-instruction control signal.
-- `csr_illegal` from the file feeds the illegal-instruction trap input wired in 1.3.
+### 1.1 Wire CSR-instruction decode into the core (landed)
+- `control.v` extended with `funct3` input + new outputs `is_csr` / `csr_op` / `csr_use_imm` / `illegal_system` / `illegal_opcode`. CSR ops decode to full functionality; ECALL/EBREAK/MRET decode to an illegal-instruction placeholder consumed by Phase 1.2's trap FSM. (commit `de2515f`)
+- `rv32i_core.v` consumes the decoder outputs: `csr_addr_o = instr[31:20]`; `csr_write_data_o` from `rs1_data` or `{27'b0, rs1_addr}` zimm-extension; `csr_read_en_o` gated on `rd_addr != 0`; rs1=x0 / zimm=0 no-write gating for CSRRS/CSRRC variants applied at the use site. Writeback mux extended from 4 sources to 5 (CSR reads added). `illegal_inst_o` = `csr_illegal_i | illegal_system | illegal_opcode`. `instret_tick_o = !rst` for the single-cycle core. `mtvec_i / mepc_i / mstatus_mie_i` plumbed through the core's port list per Decision D1, awaiting Phase 1.2's PC-redirect mux. (commit `1ee341c`)
+- `fpga_top.v` instantiates `csr_file` as a sibling of `rv32i_core`. Trap entry/exit inputs tied 0; `core_illegal_inst` dangles awaiting Phase 1.2's trap FSM. (commit `f1cedd3`)
+- `tb/tb_rv32i_core_csr.v` directed integration testbench: 14 tests, 26 individual checks covering CSRRW round-trip, CSRRS/CSRRC set+clear, rs1=x0/zimm=0 no-write gating (×4), rd=x0 write-still-happens, CSRRWI immediate, RO-write illegal, unimpl-read illegal, minstret/mcycle counters, RMW old-vs-new semantic. (commit `8fd6a8d`)
+- `sw/csr_test.S` + `tb/tb_fpga_top_csr.v` + `make sim-fpga-csr` flow proves end-to-end CSR integration in the synthesized memory map (BRAM IMEM + Wishbone DMEM + real wb_uart). The asm test writes `0x12345678` to mscratch via CSRRW, reads back via CSRRS, and prints `PASS\r\n` over UART on success. (commit `782f12c`)
+- Phase 1.0's `csr_file` interface held up under integration without modification — the "designed for all consumers" framing from `docs/phase1_context.md` validated.
+- All four Phase 1.1 RTL/asm commits passed `cd tests && make run-all` with cycle counts byte-identical to the Phase 1.0 baseline (`±0`, not `±1`).
 
 ### 1.2 Trap FSM — ECALL / EBREAK / MRET
 - Decode the trap-instruction subset of `SYSTEM` (funct3 == 0): ECALL (imm 0), EBREAK (imm 1), MRET (imm 0x302).

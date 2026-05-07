@@ -1,10 +1,21 @@
-# CSR Map — Phase 1.0
+# CSR Map — Phase 1.0 + 1.1
 
-Reference for the M-mode CSR set implemented in `rtl/csr_file.v`. The
-file is a standalone module in Phase 1.0 — wiring into `rv32i_core.v`
-lands in Phase 1.1, and the trap FSM (`trap_enter` / `trap_return`)
-lands in Phase 1.2. All CSR addresses below match the RISC-V Privileged
-Architecture spec v1.12.
+Reference for the M-mode CSR set implemented in `rtl/csr_file.v`. All
+CSR addresses below match the RISC-V Privileged Architecture spec v1.12.
+
+**Phase 1.1 status:** `csr_file` is integrated into the core via the six
+CSR instructions (CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI). The
+SYSTEM-opcode decode lives in `rtl/control.v`; the CSR datapath ports
+on `rv32i_core.v` (`csr_addr_o` / `csr_read_en_o` / `csr_write_op_o` /
+`csr_write_data_o` and the `csr_read_data_i` / `csr_illegal_i` returns)
+wire core ↔ csr_file in `rtl/fpga_top.v`. `instret_tick` is driven by
+the core's retirement signal, so `minstret` increments 1/cycle on this
+single-cycle core. Trap entry/exit (`trap_enter` / `trap_return`) lands
+in Phase 1.2 — those inputs are tied 0 in the Phase 1.1 fpga_top wiring.
+
+See `docs/datapath.md` for the SYSTEM-decode signal flow and
+`tb/tb_rv32i_core_csr.v` for the directed integration coverage (14 tests,
+26 checks).
 
 ## Address Map
 

@@ -130,3 +130,31 @@ design without a coverage signal.
 with `--coverage-line --coverage-toggle` and post-processes
 `logs/coverage.dat` with `verilator_coverage --annotate`. Don't
 gate CI on a coverage threshold — use it as a diagnostic tool.
+
+---
+
+## TB `$display` strings must stay ASCII-only — caught in Phase 1.1
+
+**What's the rule:** Testbench `$display` message strings, especially
+when stored in fixed-width `[8*N-1:0]` packed-string task parameters,
+must contain only ASCII characters. UTF-8 multi-byte glyphs (em-dash
+`—` U+2014, en-dash `–`, fancy quotes, etc.) inject non-text bytes
+into the simulator's stdout that propagate through pipes and `tee`.
+
+**Why it matters:** The CI unit-TB loop in
+`.github/workflows/ci.yml` matches `ALL.*PASSED` via
+`echo "$output" | grep -Eq`. When the captured output contains
+non-text bytes, GNU `grep` switches to binary mode and silently
+suppresses matches — so a passing TB ("ALL TESTS PASSED" appears
+on stdout) is reported as a CI failure. Reproduced once during
+Phase 1.1 Step 3 when `tb_control.v` had em-dashes in its message
+strings: every test passed locally, but CI's regex check returned
+zero matches.
+
+**Action:** keep TB `$display` strings ASCII-only. If a unit TB needs
+typographic dashes for readability, use `--` (two ASCII hyphens) or
+`:` instead.
+
+**Trigger to remove:** if the TB display infrastructure is ever
+rewritten to avoid the fixed-width packed-string pattern (e.g.,
+SystemVerilog `string` type), this constraint can be revisited.
