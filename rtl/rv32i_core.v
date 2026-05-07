@@ -204,10 +204,24 @@ module rv32i_core (
     // Branch and Jump targets
     // =========================================================================
     assign branch_target = pc_current + imm;
-    // JALR: target = (rs1 + imm) & ~1
+    // JALR: target = (rs1 + imm) & ~1   (bit 0 force-zeroed by spec)
     assign jump_target = (opcode == `OP_JALR) ?
                          ((rs1_data + imm) & 32'hFFFFFFFE) :
                          (pc_current + imm);  // JAL
+
+    // Combined "would-be next PC" for misalignment detection / mtval. JAL,
+    // JALR, and taken branches are mutually exclusive in the same cycle —
+    // ctrl_jump selects jump_target (covers JAL and JALR); branch_taken
+    // implies !ctrl_jump and selects branch_target. JAL's J-imm and
+    // branch's B-imm both have imm[0]=0 by encoding, so target[0] is
+    // always 0 for branches/JAL; JALR's target[0] is force-zeroed by the
+    // & ~1 mask above. Misalignment therefore reduces to target[1] != 0,
+    // but the [1:0] != 0 form is kept for spec parity (the optimizer
+    // folds it).
+    wire [31:0] misaligned_target = ctrl_jump ? jump_target : branch_target;
+    wire        inst_addr_misaligned_w =
+                    (ctrl_jump    && (jump_target[1:0]   != 2'b00)) ||
+                    (branch_taken && (branch_target[1:0] != 2'b00));
 
     // =========================================================================
     // PC-next mux — Phase 1.2.0 Step 2 extends with trap-entry / trap-return
@@ -297,7 +311,7 @@ module rv32i_core (
     // by replacing the literal-zero ties with the real signal sources.
     // Cause codes match RISC-V Privileged spec; priority order also matches
     // (highest to lowest in the encoder's if/else chain below).
-    wire trap_inst_addr_misaligned  = 1'b0;  // 1.2.1 Step 2: branch/jump target [1:0] != 0
+    wire trap_inst_addr_misaligned  = inst_addr_misaligned_w;
     wire trap_illegal_inst          = illegal_inst_o;
     wire trap_ebreak                = ebreak_m;
     wire trap_load_addr_misaligned  = 1'b0;  // 1.2.2: LH addr[0] | LW addr[1:0]
@@ -308,28 +322,51 @@ module rv32i_core (
 
     // Combinational priority encoder. Lowest-index cause wins, matching
     // Decision 3 from docs/handoffs/phase1_context.md (RISC-V spec order).
+    // The same priority chain also selects trap_tval — co-driven here so
+    // the cause/tval pair is always consistent. Per §4.2 of the 1.2.1
+    // handoff, all eight cause→tval pairs are declared (skeleton-first);
+    // four are driven this sub-phase, four are tied 32'b0 until 1.2.2.
     reg        trap_enter_w;
     reg [3:0]  trap_cause_code;
+    reg [31:0] trap_tval_w;
     always @(*) begin
-        trap_enter_w    = 1'b1;
-        if      (trap_inst_addr_misaligned)  trap_cause_code = 4'd0;
-        else if (trap_illegal_inst)          trap_cause_code = 4'd2;
-        else if (trap_ebreak)                trap_cause_code = 4'd3;
-        else if (trap_load_addr_misaligned)  trap_cause_code = 4'd4;
-        else if (trap_load_access_fault)     trap_cause_code = 4'd5;
-        else if (trap_store_addr_misaligned) trap_cause_code = 4'd6;
-        else if (trap_store_access_fault)    trap_cause_code = 4'd7;
-        else if (trap_ecall_m)               trap_cause_code = 4'd11;
-        else begin
+        trap_enter_w = 1'b1;
+        if (trap_inst_addr_misaligned) begin
             trap_cause_code = 4'd0;
+            trap_tval_w     = misaligned_target;
+        end else if (trap_illegal_inst) begin
+            trap_cause_code = 4'd2;
+            trap_tval_w     = instr;            // 32-bit instruction word
+        end else if (trap_ebreak) begin
+            trap_cause_code = 4'd3;
+            trap_tval_w     = 32'b0;            // per spec
+        end else if (trap_load_addr_misaligned) begin
+            trap_cause_code = 4'd4;
+            trap_tval_w     = 32'b0;            // 1.2.2: faulting load addr
+        end else if (trap_load_access_fault) begin
+            trap_cause_code = 4'd5;
+            trap_tval_w     = 32'b0;            // 1.2.2: faulting load addr
+        end else if (trap_store_addr_misaligned) begin
+            trap_cause_code = 4'd6;
+            trap_tval_w     = 32'b0;            // 1.2.2: faulting store addr
+        end else if (trap_store_access_fault) begin
+            trap_cause_code = 4'd7;
+            trap_tval_w     = 32'b0;            // 1.2.2: faulting store addr
+        end else if (trap_ecall_m) begin
+            trap_cause_code = 4'd11;
+            trap_tval_w     = 32'b0;            // per spec
+        end else begin
+            trap_cause_code = 4'd0;
+            trap_tval_w     = 32'b0;
             trap_enter_w    = 1'b0;
         end
     end
 
     // Encoder outputs. csr_file masks trap_pc[1:0] internally on the mepc
-    // write, so passing the raw current PC is correct.
+    // write so passing the raw current PC is correct. csr_file does NOT
+    // mask trap_tval — for inst_addr_misaligned the misaligned target's
+    // low bits ARE the relevant data and must reach mtval unmodified.
     wire [31:0] trap_cause_w = {28'b0, trap_cause_code};
-    wire [31:0] trap_tval_w  = 32'b0;          // ECALL/EBREAK have tval=0
     wire [31:0] trap_pc_w    = pc_current;
 
     // Step 2 of 1.2.0: encoder outputs are routed both to the PC-mux above
