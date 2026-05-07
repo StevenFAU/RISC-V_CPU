@@ -92,6 +92,17 @@ sim-fpga-c:
 		$(TB_DIR)/tb_fpga_top_c.v
 	$(VVP) $(SIM_DIR)/tb_fpga_top_c.vvp
 
+# Run FPGA top-level testbench against the Phase 1.1 csr_test asm program.
+# Needs sim/csr_test.hex (produced by `make asm PROG=csr_test`); the PASS/
+# FAIL strings are inlined into DMEM by the testbench itself (no _dmem.hex).
+sim-fpga-csr:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_csr.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_csr.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_csr.vvp
+
 # Open GTKWave on most recent VCD for a module
 # Usage: make wave MOD=alu
 wave:
@@ -101,9 +112,14 @@ wave:
 
 # Assemble a test program: .S -> .o -> .elf -> .hex
 # Usage: make asm PROG=test_basic
+#
+# -march=rv32i_zicsr enables the Zicsr (control & status register) extension
+# alongside the base RV32I integer ISA. Required for CSRRW/CSRRS/CSRRC and
+# their immediate variants in sw/csr_test.S; harmless for programs that
+# don't use CSR ops (hello.S, timer_test.S, gpio_test.S, test_basic.S).
 asm: $(SW_DIR)/$(PROG).S
 	@mkdir -p $(SIM_DIR)
-	$(AS) -march=rv32i -mabi=ilp32 -o $(SIM_DIR)/$(PROG).o $(SW_DIR)/$(PROG).S
+	$(AS) -march=rv32i_zicsr -mabi=ilp32 -o $(SIM_DIR)/$(PROG).o $(SW_DIR)/$(PROG).S
 	$(LD) -m elf32lriscv -T $(SW_DIR)/link.ld -o $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG).o
 	$(OBJCOPY) -O verilog $(SIM_DIR)/$(PROG).elf $(SIM_DIR)/$(PROG)_byte.hex
 	python3 $(SIM_DIR)/make_imem_hex.py $(SIM_DIR)/$(PROG)_byte.hex $(SIM_DIR)/$(PROG).hex
@@ -184,4 +200,4 @@ c: $(SW_DIR)/$(PROG).c $(SW_DIR)/crt0.S $(SW_DIR)/syscalls.c $(SW_DIR)/c_link.ld
 clean:
 	rm -rf $(SIM_DIR)/*.vvp $(SIM_DIR)/*.vcd $(SIM_DIR)/*.o $(SIM_DIR)/*.elf $(SIM_DIR)/*.hex
 
-.PHONY: sim sim-top sim-fpga sim-fpga-c wave asm c clean
+.PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr wave asm c clean
