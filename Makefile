@@ -114,6 +114,40 @@ sim-fpga-ecall:
 		$(TB_DIR)/tb_fpga_top_ecall.v
 	$(VVP) $(SIM_DIR)/tb_fpga_top_ecall.vvp
 
+# Run FPGA top-level testbench against the Phase 1.2.1 ebreak_test asm program.
+# Needs sim/ebreak_test.hex (produced by `make asm PROG=ebreak_test`).
+sim-fpga-ebreak:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_ebreak.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_ebreak.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_ebreak.vvp
+
+# Run FPGA top-level testbench against the Phase 1.2.1 illegal_test asm program.
+# Verifies illegal-instruction trap entry + observable regfile_we side-effect
+# gate (sentinel register survives the trap cycle).
+# Needs sim/illegal_test.hex (produced by `make asm PROG=illegal_test`).
+sim-fpga-illegal:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_illegal.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_illegal.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_illegal.vvp
+
+# Run FPGA top-level testbench against the Phase 1.2.1 misaligned_jump_test
+# asm program. Exercises JAL-misaligned trap-entry plus inline JALR-with-bit-0-
+# masked and BEQ-not-taken-misaligned cases that must NOT trap.
+# Needs sim/misaligned_jump_test.hex (`make asm PROG=misaligned_jump_test`).
+sim-fpga-misaligned:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_misaligned.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_misaligned.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_misaligned.vvp
+
 # Open GTKWave on most recent VCD for a module
 # Usage: make wave MOD=alu
 wave:
@@ -211,4 +245,6 @@ c: $(SW_DIR)/$(PROG).c $(SW_DIR)/crt0.S $(SW_DIR)/syscalls.c $(SW_DIR)/c_link.ld
 clean:
 	rm -rf $(SIM_DIR)/*.vvp $(SIM_DIR)/*.vcd $(SIM_DIR)/*.o $(SIM_DIR)/*.elf $(SIM_DIR)/*.hex
 
-.PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr sim-fpga-ecall wave asm c clean
+.PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr sim-fpga-ecall \
+        sim-fpga-ebreak sim-fpga-illegal sim-fpga-misaligned \
+        wave asm c clean
