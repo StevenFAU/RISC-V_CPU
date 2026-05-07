@@ -30,6 +30,11 @@ module tb_rv32i_core;
     wire        wbs0_ack;
     wire [2:0]  wbs0_funct3;
 
+    // Phase 1.1: rv32i_core gained CSR-file interface ports. test_basic.S
+    // doesn't use CSR instructions; tie inputs safely and leave outputs
+    // unconnected. The dedicated tb_rv32i_core_csr.v exercises the integrated
+    // core+csr_file path.
+    /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core uut (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
@@ -37,8 +42,15 @@ module tb_rv32i_core;
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),
+        .csr_addr_o(), .csr_read_en_o(),
+        .csr_write_op_o(), .csr_write_data_o(),
+        .csr_read_data_i(32'd0), .csr_illegal_i(1'b0),
+        .instret_tick_o(),
+        .illegal_inst_o(),
+        .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // Async read (SYNC_READ=0) — testbench uses pc_current, not pc_next
     imem #(.DEPTH(IMEM_DEPTH)) u_imem (

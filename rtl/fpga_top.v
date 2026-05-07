@@ -108,6 +108,11 @@ module fpga_top #(
     // =========================================================================
     // CPU Core
     // =========================================================================
+    // Phase 1.1: the core's CSR-file interface ports are stubbed off here.
+    // Step 5 of the Phase 1.1 handoff replaces these stubs with the real
+    // csr_file instantiation and wiring. Until then, rv32ui programs run
+    // unchanged because no CSR instructions execute.
+    /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core u_core (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
@@ -115,8 +120,16 @@ module fpga_top #(
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),
+        // CSR interface — stubs replaced by csr_file instantiation in Step 5
+        .csr_addr_o(), .csr_read_en_o(),
+        .csr_write_op_o(), .csr_write_data_o(),
+        .csr_read_data_i(32'd0), .csr_illegal_i(1'b0),
+        .instret_tick_o(),
+        .illegal_inst_o(),
+        .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // =========================================================================
     // Instruction Memory

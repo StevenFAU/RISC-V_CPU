@@ -55,6 +55,13 @@ module tb_compliance;
     // =========================================================================
     // Core instance
     // =========================================================================
+    // Phase 1.1: rv32i_core gained CSR-file interface ports. The compliance
+    // harness exercises only RV32I integer instructions (rv32ui), so no CSR
+    // instructions execute here — tying the CSR inputs to safe defaults and
+    // leaving the outputs unconnected is sound. illegal_inst_o is unconsumed
+    // (Phase 1.2 trap path); rv32ui programs use only allocated opcodes so it
+    // never pulses.
+    /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core dut (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
@@ -62,8 +69,16 @@ module tb_compliance;
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),
+        // Phase 1.1 CSR-file interface (tied off — no CSR ops in rv32ui)
+        .csr_addr_o(), .csr_read_en_o(),
+        .csr_write_op_o(), .csr_write_data_o(),
+        .csr_read_data_i(32'd0), .csr_illegal_i(1'b0),
+        .instret_tick_o(),
+        .illegal_inst_o(),
+        .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // =========================================================================
     // Instruction fetch — combinational read from unified memory

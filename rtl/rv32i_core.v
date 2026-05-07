@@ -1,5 +1,29 @@
 // RV32I Single-Cycle Core — Top-Level Datapath
 // Memory is external: core exposes instruction fetch and data memory bus ports.
+//
+// Phase 1.1 wired CSR-instruction decode + writeback into the datapath:
+//
+//   * SYSTEM-opcode decode: control.v emits is_csr / csr_op / csr_use_imm /
+//     illegal_system / illegal_opcode. The core consumes those to drive the
+//     csr_addr_o / csr_read_en_o / csr_write_op_o / csr_write_data_o ports
+//     into the external csr_file, and routes csr_read_data_i back through a
+//     new (5th) source on the writeback mux.
+//
+//   * illegal_inst_o = csr_illegal_i | illegal_system | illegal_opcode.
+//     Phase 1.1 leaves this output unconnected at fpga_top; Phase 1.2's
+//     trap FSM consumes it.
+//
+//   * instret_tick_o = !rst — single-cycle core retires every non-reset
+//     cycle. Phase 1.2 may refine to gate on !illegal_inst once the trap
+//     path materializes (so trapped cycles don't double-count as retires).
+//
+//   * mtvec_i / mepc_i / mstatus_mie_i are inputs from csr_file, plumbed
+//     through the core's port list now per the "designed for all
+//     consumers" principle even though Phase 1.1 doesn't read them. Phase
+//     1.2's PC-redirect mux lives inside the core, so adding the ports
+//     here in 1.1 avoids a port-list churn when the trap FSM lands.
+//     The lint_off UNUSEDSIGNAL waivers around them mark this intent.
+
 `include "defines.v"
 
 module rv32i_core (
@@ -20,6 +44,32 @@ module rv32i_core (
 
     // Pre-fetch address for BRAM-based IMEM (= pc_next, forced to 0 during reset)
     output wire [31:0] imem_addr_next,
+
+    // -------- Phase 1.1: CSR-file interface --------
+    // Outputs (decoder-driven)
+    output wire [11:0] csr_addr_o,
+    output wire        csr_read_en_o,
+    output wire [2:0]  csr_write_op_o,    // 000=none 001=write 010=set 011=clear
+    output wire [31:0] csr_write_data_o,
+
+    // Inputs (csr_file → core)
+    input  wire [31:0] csr_read_data_i,
+    input  wire        csr_illegal_i,
+
+    // Retirement tick (drives csr_file.instret_tick)
+    output wire        instret_tick_o,
+
+    // Illegal-instruction detection (unconnected at fpga_top in 1.1; consumed
+    // by the Phase 1.2 trap path)
+    output wire        illegal_inst_o,
+
+    // Trap-related CSR outputs from csr_file, routed through for Phase 1.2's
+    // PC-redirect mux. Tied unused in 1.1.
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  wire [31:0] mtvec_i,
+    input  wire [31:0] mepc_i,
+    input  wire        mstatus_mie_i,
+    /* verilator lint_on UNUSEDSIGNAL */
 
     // Debug/RVFI access to architectural state
     output wire [31:0] debug_pc,
@@ -51,14 +101,12 @@ module rv32i_core (
     wire        alu_src, ctrl_branch, ctrl_jump;
     wire [1:0]  alu_op;
 
-    // Phase 1.1 control outputs — stub-wired in Step 3, consumed in Step 4.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // Phase 1.1 control outputs (consumed below).
     wire        is_csr;
     wire [2:0]  csr_op;
     wire        csr_use_imm;
     wire        illegal_system;
     wire        illegal_opcode;
-    /* verilator lint_on UNUSEDSIGNAL */
 
     // Branch/Jump resolution
     wire        branch_taken;
@@ -71,6 +119,7 @@ module rv32i_core (
     wire [4:0]  rs1_addr     = instr[19:15];
     wire [4:0]  rs2_addr     = instr[24:20];
     wire        funct7_bit30 = instr[30];
+    wire [11:0] csr_addr_f   = instr[31:20];   // CSR address field for CSR insts
 
     // =========================================================================
     // Bus outputs
@@ -135,12 +184,60 @@ module rv32i_core (
     assign alu_b = alu_src ? imm : rs2_data;
 
     // =========================================================================
-    // Write-back mux: ALU result vs memory load vs PC+4 (JAL/JALR) vs imm (LUI)
+    // Phase 1.1 — CSR-instruction operand and write-op gating
     // =========================================================================
-    assign rd_data = (opcode == `OP_LUI) ? imm :
+    // Source operand for CSR write:
+    //   register variants:  rs1_data
+    //   immediate variants: zero-extended 5-bit rs1 field (= zimm)
+    wire [31:0] csr_src_data = csr_use_imm ? {27'b0, rs1_addr} : rs1_data;
+
+    // "No-write" optimization (RV-Privileged Spec):
+    //   CSRRW/CSRRWI: always write (even if rs1=x0 / zimm=0).
+    //   CSRRS/CSRRC and CSRRSI/CSRRCI: write only if source operand non-zero.
+    //
+    // For register variants the source-zero check is rs1_addr==0 (regfile
+    // gate already returns 0 for x0). For immediate variants the check is
+    // also rs1_addr==0 since rs1_addr IS the zimm field.
+    wire src_is_zero = (rs1_addr == 5'b0);
+    wire write_op_active = (csr_op == 3'b001) ||                      // CSRRW(I): always
+                           ((csr_op == 3'b010 || csr_op == 3'b011) && !src_is_zero);
+
+    assign csr_addr_o       = csr_addr_f;
+    assign csr_write_op_o   = is_csr && write_op_active ? csr_op : 3'b000;
+    assign csr_write_data_o = csr_src_data;
+
+    // CSR read suppression for CSRRW with rd=x0: the read still happens in
+    // csr_file but its side-effects (e.g. read-of-RO triggering csr_illegal)
+    // are gated by csr_read_en. Phase 1.0's csr_file returns 0 when read_en
+    // is low.
+    assign csr_read_en_o = is_csr && (rd_addr != 5'b0);
+
+    // =========================================================================
+    // Write-back mux — Phase 1.1 grows from 4 sources to 5 (CSR added).
+    // =========================================================================
+    // CSR is placed first since SYSTEM doesn't share an opcode with any of
+    // LUI/JAL/JALR/LOAD; the priority order is mutually-exclusive in
+    // practice, ordered for readability.
+    assign rd_data = is_csr               ? csr_read_data_i :
+                     (opcode == `OP_LUI)  ? imm :
                      (ctrl_jump)          ? pc_plus4 :
                      (mem_to_reg)         ? dmem_rdata :
-                     alu_result;
+                                            alu_result;
+
+    // =========================================================================
+    // Phase 1.1 — illegal-instruction detection + retirement tick
+    // =========================================================================
+    // illegal_inst_o is the OR of:
+    //   * csr_illegal_i  — CSR-file detected RO write or unimplemented addr
+    //   * illegal_system — SYSTEM-opcode placeholder (ECALL/EBREAK/MRET/WFI)
+    //   * illegal_opcode — unrecognized opcode at the decoder default branch
+    // Unconnected at fpga_top in 1.1; Phase 1.2's trap FSM consumes it.
+    assign illegal_inst_o = csr_illegal_i | illegal_system | illegal_opcode;
+
+    // Single-cycle core retires every non-reset cycle. Phase 1.2 may gate
+    // this on !illegal_inst once the trap path can suppress retirement of
+    // a faulting instruction.
+    assign instret_tick_o = !rst;
 
     // =========================================================================
     // Module instances
