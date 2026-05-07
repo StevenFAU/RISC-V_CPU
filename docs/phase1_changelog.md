@@ -3,6 +3,211 @@
 Running log of fixes/changes landed during Phase 1 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-05-07 (Phase 1.2.1)
+
+- [feat] Phase 1.2.1 — second sub-phase of the Phase 1.2 trap work. Lights
+  up three new cause sources on the encoder skeleton built in 1.2.0:
+  EBREAK (cause 3), illegal_inst (cause 2), and inst_addr_misaligned
+  (cause 0). Promotes `trap_tval` from a single tied-zero wire to a
+  per-cause priority mux, again as skeleton-first (four cause→tval
+  pairs driven this sub-phase, four tied 0 until 1.2.2). The four
+  side-effect gates from 1.2.0 carry forward unchanged — none of the
+  three new causes is at-issue, so the pre-issue / at-issue gate
+  refactor remains a 1.2.2 task. (commits `22dce4b` + `7e03aba` +
+  `b029b61`)
+- [rtl] `rtl/rv32i_core.v` —
+  - EBREAK decoded inline at the core top level next to ECALL (SYSTEM,
+    funct3=000, imm12=0x001, rs1=0, rd=0). Mirrors the 1.2.0 ECALL
+    pattern — `control.v` stays minimal; the carve-out happens at the
+    use site.
+  - Carve-out chain extended to a load-bearing convention. The
+    expression in `illegal_inst_o`:
+    `csr_illegal_i | (illegal_system & ~ecall_m & ~ebreak_m) |
+    illegal_opcode`. ECALL was carved out 1.2.0; EBREAK is carved out
+    here; MRET will be carved out 1.2.3 (`& ~mret_m`). The convention
+    comment in the file warns that future SYSTEM-funct3=0 instructions
+    (FENCE.I, future Zicsr/Zihint encodings) must extend the chain
+    explicitly — they cannot silently inherit "is legal" by being
+    unrecognized, and must not silently inherit "is illegal" by
+    failing to carve out.
+  - Two encoder inputs lit up: `trap_illegal_inst <= illegal_inst_o`
+    (was `1'b0`) and `trap_ebreak <= ebreak_m` (was `1'b0`). No
+    combinational loop: `illegal_inst_o` depends only on decode-side
+    signals, not on `trap_enter_w`.
+  - `inst_addr_misaligned` detection added at the branch/jump target
+    compute. Combinational: `(ctrl_jump && jump_target[1:0] != 0) ||
+    (branch_taken && branch_target[1:0] != 0)`. Wired into the
+    encoder's `inst_addr_misaligned` cause input. JALR's bit-0 mask
+    (`& 32'hFFFFFFFE`) was already spec-correct in the existing core
+    (no fix needed) — only `target[1]` participates in the JALR check.
+    JAL's J-imm and branch's B-imm both have `imm[0]=0` by encoding,
+    so `target[0]` is always 0; the `[1:0] != 0` check reduces to
+    `target[1] != 0` in practice but the spec form is kept (optimizer
+    folds it).
+  - `trap_tval` promoted from a single tied-zero wire to a per-cause
+    priority mux, co-driven by the same always block as the cause
+    encoder (cause and tval always consistent). Eight cause→tval
+    pairs declared (skeleton-first):
+      `inst_addr_misaligned -> misaligned_target` (the would-be PC)
+      `illegal_inst         -> instr` (the 32-bit instruction word)
+      `ebreak               -> 0`  (per spec)
+      `load_addr_misaligned -> 0`  (1.2.2: faulting load addr)
+      `load_access_fault    -> 0`  (1.2.2)
+      `store_addr_misaligned-> 0`  (1.2.2)
+      `store_access_fault   -> 0`  (1.2.2)
+      `ecall_m              -> 0`  (per spec)
+    `csr_file` does not mask `trap_tval` (unlike `trap_pc`), so for
+    `inst_addr_misaligned` the misaligned target's low bits reach
+    `mtval` unmodified — that is the relevant data per spec.
+- [rtl] `rtl/fpga_top.v` — `core_illegal_inst` UNUSEDSIGNAL waiver
+  removed; the wire is deleted and the core's `illegal_inst_o` port
+  left empty on the instance under the existing PINCONNECTEMPTY scope
+  around `u_core`. The encoder consumes the signal internally; the
+  `trap_*_o` ports already expose the resulting trap state to the
+  top. `bus_error_o` UNUSEDSIGNAL waiver remains in place — 1.2.2
+  consumes it.
+- [rtl] `rtl/csr_file.v` — unchanged (the trap interface is correct;
+  this sub-phase only adds new drivers feeding it, again).
+- [tb] `tb/tb_rv32i_core_csr.v` — seven new directed tests (18-24),
+  41 new assertions; total 81/81 (was 40/40):
+  - 18: EBREAK trap entry — `mepc` captures EBREAK PC, `mcause=3`,
+    `mtval=0`, MIE/MPIE rotation, PC redirected to `mtvec`,
+    `instret_tick` gated, `illegal_inst_o` quiet (EBREAK is now legal
+    by carve-out).
+  - 19: illegal_inst trap entry + observable regfile_we gate. Trigger
+    is CSRRW to RO `mvendorid` (the only path in the current core
+    where `illegal_inst_o` pulses while the decoder also asserts
+    `reg_write=1`, since `is_csr=1`). Pre-loaded sentinel `x5 =
+    0xDEADBEEF` survives the trap cycle — observable proof that the
+    1.2.0 `regfile_we` skeleton gate is load-bearing on this path.
+    Verifies `mtval = 0xF1129EF3` (the encoded illegal instruction
+    word).
+  - 20: inst_addr_misaligned via JAL with imm[1]=1.
+  - 21: inst_addr_misaligned via taken BEQ with imm[1]=1.
+  - 22: BEQ NOT-taken with misaligned imm — must NOT trap (gating on
+    `branch_taken` proven; misaligned target is never fetched).
+  - 23: inst_addr_misaligned via JALR with target[1]=1 (after the
+    spec bit-0 mask).
+  - 24: JALR with imm[0]=1 masked → must NOT trap. Also verifies
+    JALR's `pc_plus4` writeback completes.
+  - New encoders: `enc_jal` (J-type), `enc_jalr` (I-type), `enc_branch`
+    + `beq` (B-type). New `EBREAK` localparam.
+  - `begin_test` / `expect_eq32` / `expect_bool` desc-field width
+    bumped from `[8*48-1:0]` to `[8*64-1:0]` (1.2.0 closure flagged
+    48 as too narrow for trap-cycle test names; 64 going forward per
+    the 1.2.1 handoff).
+- [sw] `sw/ebreak_test.S` (new) — end-to-end EBREAK trap-entry demo,
+  duplicate-and-rename of `ecall_test.S`. Verifies `mepc`, `mcause=3`,
+  `mtval=0`, MIE/MPIE inside the handler, prints `PASS\r\n` over UART.
+- [sw] `sw/illegal_test.S` (new) — end-to-end illegal-instruction
+  trap demo. Trigger: `csrrw t4, mvendorid, t0` (RO write attempt).
+  Pre-loads `t4 = 0xDEADBEEF` as the sentinel; the handler verifies
+  `t4` is unchanged after the trap (regfile_we gate proven through
+  the synthesized SoC), plus `mepc`, `mcause=2`, `mtval=0xF1129EF3`,
+  MIE/MPIE.
+- [sw] `sw/misaligned_jump_test.S` (new) — end-to-end
+  inst_addr_misaligned demo. Exercises JALR-with-bit-0-masked and
+  BEQ-not-taken-misaligned inline as must-NOT-trap cases (PC
+  progression past them is implicit verification), then triggers a
+  JAL-misaligned trap. Handler verifies `mepc=jal_pc`, `mcause=0`,
+  `mtval=jal_pc+6`. The misaligned BEQ and JAL are emitted as raw
+  `.word` (GAS won't emit a B-imm or J-imm with bit 1 set against
+  word-aligned labels). For the BEQ-taken / JALR-target[1]=1 trap
+  variants and the JALR-imm[0]-masked no-trap variant, see
+  `tb_rv32i_core_csr.v` tests 21 / 23 / 24 — the directed TB covers
+  all variants with cycle-precision checks.
+- [tb] `tb/tb_fpga_top_ebreak.v`, `tb/tb_fpga_top_illegal.v`,
+  `tb/tb_fpga_top_misaligned.v` (new) — duplicate-and-rename of
+  `tb_fpga_top_ecall.v` for each new asm test. Each loads its hex
+  image, preloads PASS/FAIL strings into DMEM, captures 6 UART bytes,
+  expects `PASS\r\n`.
+- [build] `Makefile` — three new targets `sim-fpga-ebreak`,
+  `sim-fpga-illegal`, `sim-fpga-misaligned`, mirroring
+  `sim-fpga-ecall`. Added to `.PHONY`.
+- [docs] No standalone doc updates this sub-phase. The carve-out
+  chain convention is documented in the `illegal_inst_o` comment in
+  `rv32i_core.v`. The "csr_file does not mask trap_tval" property is
+  noted alongside the `trap_tval` mux in the same file.
+
+### Side-effect gate observability status
+
+The four 1.2.0 side-effect gates (`!trap_enter_w` masking
+`regfile_we` / `dmem_we` / `dmem_re` / `instret_tick`) carry forward
+unchanged in 1.2.1.
+
+| Gate           | Status this sub-phase                                |
+|----------------|-----------------------------------------------------|
+| `instret_tick` | Observably tested (carry-over from 1.2.0; verified  |
+|                | again in tests 18 / 19 — `trap_with_instret_observed`|
+|                | latch).                                              |
+| `regfile_we`   | Newly observable in 1.2.1 via the illegal_inst      |
+|                | sentinel test (TB test 19, sw/illegal_test.S).      |
+| `dmem_we`      | Skeleton — none of the three 1.2.1 cause sources    |
+|                | exercises a memory write. 1.2.2's misaligned-store  |
+|                | trap will light it up.                              |
+| `dmem_re`      | Skeleton — same. 1.2.2's misaligned-load trap.       |
+
+### Verification
+
+- `verilator --lint-only -Irtl -Wall --top-module fpga_top rtl/*.v`:
+  clean. The 1.2.0 `core_illegal_inst` UNUSEDSIGNAL waiver in
+  `fpga_top.v` is removed in this sub-phase; the `bus_error_o`
+  waiver on the `wb_interconnect` output stays in place (1.2.2's
+  consumer).
+- `make sim MOD=rv32i_core_csr`: 81/81 PASS, "ALL TESTS PASSED" (was
+  40/40 in 1.2.0).
+- `make sim MOD=csr_file`: 63/63 PASS (Phase 1.0 unchanged).
+- All 19 unit testbenches: PASS, no regression.
+- `cd tests && make run-all`: 37/37 PASS, all 37 cycle counts
+  byte-identical to `phase1.2.0-complete` (and therefore to
+  `phase1.1-complete`) after each of the three RTL/TB commits. No
+  rv32ui test contains an illegal opcode, EBREAK, or a misaligned
+  branch/jump target, so lighting up these three cause sources
+  produces zero drift on rv32ui — the load-bearing regression check
+  for this sub-phase.
+- `make sim-fpga-ebreak`: PASS, `PASS\r\n` received end-to-end. TB
+  prints `*** EBREAK FPGA TEST PASSED -- "PASS\r\n" received
+  correctly ***`.
+- `make sim-fpga-illegal`: PASS, `PASS\r\n` received end-to-end with
+  the `t4 = 0xDEADBEEF` sentinel preserved through the trap cycle.
+  TB prints `*** ILLEGAL_INST FPGA TEST PASSED -- sentinel x29
+  preserved through trap ***`.
+- `make sim-fpga-misaligned`: PASS, `PASS\r\n` received end-to-end.
+  TB prints `*** MISALIGNED_JUMP FPGA TEST PASSED -- JAL trap +
+  inline non-trap cases verified ***`.
+- `make sim-fpga-ecall`: PASS (1.2.0 regression — no change).
+
+### Surprises / notes for 1.2.2
+
+- **JALR bit-0 masking.** Already spec-correct in the existing core
+  (`(rs1 + imm) & 32'hFFFFFFFE` at the JAL/JALR target compute). No
+  fix was needed for the inst_addr_misaligned detection — only
+  `target[1]` participates in the JALR check. The 1.2.1 handoff
+  flagged this as a potential pre-existing bug to fix; it was not.
+- **Sentinel-test design tension.** The handoff specified using a
+  true "illegal opcode" with non-zero `rd` to observably exercise
+  the `regfile_we` gate. In the existing core, `control.v`'s default
+  branch keeps `reg_write=0` for unrecognized opcodes — so a true
+  unknown-opcode trigger does not exercise the gate observably. The
+  CSR-illegal path (CSRRW to a RO CSR) is the only path where
+  `illegal_inst_o` pulses while `reg_write` would otherwise be 1
+  (since `is_csr=1` for SYSTEM funct3 != 0). Used that path in both
+  the directed TB test (test 19) and the asm test
+  (`sw/illegal_test.S`). A future hardening could OR
+  `illegal_opcode` into the `regfile_we` suppression explicitly so
+  that true unknown opcodes also carry `reg_write=1` heading into
+  the gate (making the gate's protection uniform across all
+  illegal-instruction paths) — out of scope for 1.2.1, candidate
+  for 1.2.2 alongside the at-issue gate refactor.
+- **trap_tval mux structure.** Built as a parallel cause→tval
+  priority chain inside the same `always @(*)` block as the cause
+  encoder — single source of truth for the priority logic, cause
+  and tval always consistent. Same skeleton-first principle as the
+  encoder itself: all eight pairs declared, four 1.2.2 paths tied
+  `32'b0` until 1.2.2 substitutes their real drivers. Lighting up
+  the 1.2.2 paths will be a literal-tie → live-signal swap on each
+  pair.
+
 ## 2026-05-07 (Phase 1.2.0)
 
 - [feat] Phase 1.2.0 — first sub-phase of the Phase 1.2 trap work. Adds
