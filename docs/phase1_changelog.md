@@ -3,6 +3,237 @@
 Running log of fixes/changes landed during Phase 1 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-05-07 (Phase 1.2.2)
+
+- [feat] Phase 1.2.2 — third sub-phase of the Phase 1.2 trap work.
+  Lights up the four memory-side cause sources on the encoder built
+  in 1.2.0/1.2.1: `load_addr_misaligned` (cause 4),
+  `load_access_fault` (cause 5), `store_addr_misaligned` (cause 6),
+  `store_access_fault` (cause 7). The at-issue causes (5 / 7) drive
+  the structural pre-issue/at-issue gate refactor — the most
+  architecturally significant change of the sub-phase. (commits
+  `c2a506a` + `dd8c9b6` + `91de608`)
+- [rtl] `rtl/rv32i_core.v` —
+  - LSU-side misalignment detection added at the address-compute
+    stage. Combinational on `dmem_addr` + `funct3` + `mem_read` /
+    `mem_write`:
+      `load_addr_misaligned_w  = mem_read  & ((F3_WORD && addr[1:0]!=0)
+                                            | ((F3_HALF|F3_HALFU) && addr[0]!=0))`
+      `store_addr_misaligned_w = mem_write & ((F3_WORD && addr[1:0]!=0)
+                                            | (F3_HALF && addr[0]!=0))`
+    LB/LBU/SB cannot misalign by construction. The `mem_read` /
+    `mem_write` qualifier prevents non-LSU instructions (whose
+    `dmem_addr` carries arbitrary bits) from tripping detection.
+    Wired into the encoder's `trap_load_addr_misaligned` and
+    `trap_store_addr_misaligned` cause inputs (replacing the
+    `1'b0` ties).
+  - **Pre-issue / at-issue gate refactor.** New intermediate signals:
+      `pre_issue_trap_w = inst_addr_misaligned | illegal_inst | ebreak
+                       | load_addr_misaligned | store_addr_misaligned
+                       | ecall`
+      `load_access_fault_w  = bus_error_i & dmem_re & ~load_addr_misaligned_w`
+      `store_access_fault_w = bus_error_i & dmem_we & ~store_addr_misaligned_w`
+      `at_issue_trap_w  = load_access_fault_w | store_access_fault_w`
+      `trap_enter_w     = pre_issue_trap_w | at_issue_trap_w`
+    Issue-side gates (`dmem_re` / `dmem_we`) now use
+    `~pre_issue_trap_w` (NOT `~trap_enter_w`); latch-side gates
+    (`regfile_we`, `instret_tick`) keep using `~trap_enter_w`.
+    This breaks the combinational cycle that would otherwise occur
+    between `bus_error_i` and `dmem_re`/`dmem_we`: pre-issue causes
+    suppress the bus access; at-issue causes catch a `bus_error_i`
+    that already fired in the same cycle, before regfile / instret
+    can latch.
+  - `trap_enter_w` converted from a `reg` driven inside the priority
+    encoder always block to a continuous assign of
+    `pre_issue_trap_w | at_issue_trap_w`. The always block now drives
+    only `trap_cause_code` and `trap_tval_w` from the priority chain.
+    Functional behavior is identical to the prior reg-based form —
+    the priority chain set `trap_enter_w=1` on any active cause; the
+    OR achieves the same in fewer lines.
+  - `trap_tval` mux: four `32'b0` literal ties → `dmem_addr` for
+    causes 4 / 5 / 6 / 7. All four memory-side causes use the same
+    underlying signal; the priority encoder selects which one becomes
+    `mtval`. `csr_file` does not mask `trap_tval` (carry-forward from
+    1.2.1) so the misaligned/unmapped low bits land in `mtval`
+    unmodified — that is the relevant data per spec.
+  - New top-level input port `bus_error_i` (1 bit). Wired from
+    `wb_interconnect.bus_error_o` in `fpga_top.v`. Documented at the
+    port and in the bus-outputs section as combinational + same-cycle.
+  - The at-issue source composition uses the GATED `dmem_re` /
+    `dmem_we` (post `~pre_issue_trap_w`), so a misaligned LW that
+    would otherwise hit an unmapped address has its bus issue
+    suppressed; `bus_error_i` does not even fire on that cycle.
+    Mutual exclusion is enforced at the bus layer in addition to the
+    encoder's priority-by-cause-code (cause 4 < cause 5). The
+    `~load_addr_misaligned_w` / `~store_addr_misaligned_w` qualifiers
+    in the at-issue source are defense in depth at zero hardware cost.
+- [rtl] `rtl/fpga_top.v` —
+  - New local wire `ic_bus_error` connecting
+    `wb_interconnect.bus_error_o` to `rv32i_core.bus_error_i`.
+  - The PINCONNECTEMPTY scope around the `wb_interconnect` instance
+    is removed (the previously-empty `bus_error_o` pin is now
+    connected). The `mstatus_mie_i` UNUSEDSIGNAL waiver on the core's
+    port stays in place — Phase 2 interrupts is its consumer.
+- [rtl] `rtl/csr_file.v` — unchanged. The trap interface continues to
+  be correct; this sub-phase only adds new drivers feeding it.
+- [tb] `tb/tb_rv32i_core_csr.v` — 11 new directed tests (25-35),
+  44 new assertions; total 125/125 (was 81/81):
+  - 25-28: `load_addr_misaligned` via LH at addr[0]=1 and via LW for
+    each of addr[1:0]={01,10,11}. Each test verifies `mepc` / `mcause=4`
+    / `mtval=addr` and asserts `seen_dmem_re=0` (pre-issue gate
+    suppressed the bus access).
+  - 29: `store_addr_misaligned` via SH at addr[0]=1 + observable
+    dmem_we gate. Pre-loads `tb_dmem[5]=0xCAFEBABE` (sentinel at the
+    aligned address); attempts an SH to addr=0x15 with would-be data
+    0x1234. The TB's width-aware DMEM write path would corrupt
+    `tb_dmem[5][15:0]` to `0x1234` if the gate were broken. With the
+    gate intact, dmem_we never asserts and the sentinel survives —
+    observable proof of the dmem_we gate.
+  - 30-32: `store_addr_misaligned` via SW for each of
+    addr[1:0]={01,10,11}.
+  - 33: `load_access_fault` via LW to 0xF0000000. Bus-error mock
+    window covers 0xF0000000-0xF000FFFF; the at-issue path catches
+    the error before regfile_we latches. Verifies `x5` sentinel
+    preserved (regfile_we gate observable on the at-issue path) and
+    PC redirected to mtvec.
+  - 34: `store_access_fault` via SW to 0xF0000000.
+  - 35: **Mutual-exclusion test.** LW to 0xF0000001 — both misaligned
+    AND unmapped. Pre-issue gate suppresses dmem_re; bus_error_i does
+    not assert; the encoder's priority-by-cause-code would also pick
+    4 over 5 in any event. Verifies `mcause=4` (NOT 5). This is the
+    load-bearing verification that the pre-issue/at-issue split
+    correctly enforces mutual exclusion, AND it is implicit
+    confirmation that the loop-break worked: a combinational cycle
+    would either oscillate or collapse `bus_error_i` to 0 and fail
+    the access-fault tests above.
+  - New encoders: `enc_load` (I-type) + `lh` / `lw` wrappers,
+    `enc_store` (S-type) + `sh` / `sw` wrappers.
+  - New TB infrastructure: `tb_dmem` model (64-word DMEM with
+    width-aware SW/SH/SB write path), programmable bus-error mock
+    (`bus_err_active` / `bus_err_lo` / `bus_err_hi`), `seen_dmem_we`
+    / `seen_dmem_re` observability latches, `clear_dmem` task,
+    `begin_test` resets all of these per-test.
+- [tb] `tb/tb_rv32i_core.v`, `tb/tb_compliance.v` — `bus_error_i`
+  tied to `1'b0` on the core instance (rv32ui programs only access
+  mapped DMEM and never trigger an at-issue trap; deterministic
+  tie-off keeps the access-fault path resolved to 0).
+- [sw] `sw/misaligned_load_test.S` (new) — end-to-end LH-at-odd-half-
+  word demo. Triggers cause 4; handler verifies `mepc=ld_pc`,
+  `mcause=4`, `mtval=0x00010001`, MIE/MPIE rotation, prints
+  `PASS\r\n` over UART.
+- [sw] `sw/misaligned_store_test.S` (new) — end-to-end SH-at-odd-half-
+  word demo + observable dmem_we gate. Pre-stores `0xCAFEBABE` at
+  `0x00010024` via legal SW, then attempts SH at `0x00010025`
+  (odd). The handler reads back the aligned location to confirm
+  the sentinel survived (gate observability test through the
+  synthesized SoC, not just the unit TB). Verifies `mepc`,
+  `mcause=6`, `mtval=0x00010025`, MIE/MPIE.
+- [sw] `sw/access_fault_test.S` (new) — end-to-end LW-from-unmapped-
+  address demo. Triggers cause 5 by issuing LW from `0xF0000000`
+  (well outside every wb_interconnect slave window). Pre-loads `t4
+  = 0xDEADBEEF` as a sentinel; the handler verifies `t4` is
+  unchanged after the trap (regfile_we gate proven on the at-issue
+  path through the synthesized SoC), plus `mepc`, `mcause=5`,
+  `mtval=0xF0000000`, MIE/MPIE.
+- [tb] `tb/tb_fpga_top_misaligned_load.v`,
+  `tb/tb_fpga_top_misaligned_store.v`,
+  `tb/tb_fpga_top_access_fault.v` (new) — duplicate-and-rename of
+  `tb_fpga_top_misaligned.v` for each new asm test. Each loads its
+  hex image, preloads PASS/FAIL strings into DMEM, captures 6 UART
+  bytes, expects `PASS\r\n`.
+- [build] `Makefile` — three new targets: `sim-fpga-misaligned-load`,
+  `sim-fpga-misaligned-store`, `sim-fpga-access-fault`, mirroring
+  `sim-fpga-misaligned`. Added to `.PHONY`.
+- [docs] `docs/tech_debt.md` — new "Phase 4 dependencies" section
+  with two entries: (1) at-issue trap assumes `bus_error_i` is
+  combinational; (2) at-issue trap assumes single-cycle bus
+  completion (`WB_USE_STALL=0`). Filed as separate items so a
+  future engineer addressing one does not assume it covers the other
+  — the two assumptions can break independently. The full rationale
+  + dependency chain is also pinned in-place at the bus-outputs
+  comment in `rtl/rv32i_core.v`.
+
+### Side-effect gate observability status
+
+After 1.2.2, all four 1.2.0 side-effect gates have observable test
+coverage. The "skeleton gate" framing retires after this sub-phase.
+
+| Gate           | Status this sub-phase                                    |
+|----------------|---------------------------------------------------------|
+| `instret_tick` | Carry-over from 1.2.0 — `trap_with_instret_observed`    |
+|                | latch in tb_rv32i_core_csr (tests 15 / 18 / 19 / 25+).  |
+| `regfile_we`   | Carry-over from 1.2.1 (test 19 sentinel). 1.2.2         |
+|                | adds another observability point: at-issue trap with    |
+|                | rd preserved (test 33: `x5=0xCAFEB000` survives the     |
+|                | LW-unmapped trap; sw/access_fault_test.S t4 sentinel    |
+|                | survives end-to-end).                                   |
+| `dmem_we`      | Newly observable in 1.2.2 — sentinel preservation       |
+|                | through misaligned SH (test 29 + sw/misaligned_store_   |
+|                | test.S). The pre-issue gate (post-refactor) is what     |
+|                | suppresses the would-be write.                          |
+| `dmem_re`      | Newly observable in 1.2.2 — `seen_dmem_re=0` latched    |
+|                | through tests 25 / 26 / 27 / 28 / 35 (no bus access     |
+|                | issued for any misaligned-load cycle).                  |
+
+### Verification
+
+- `verilator --lint-only -Irtl -Wall --top-module fpga_top rtl/*.v`:
+  clean. The 1.2.1 `bus_error_o` PINCONNECTEMPTY scope on
+  `wb_interconnect` is removed; the `mstatus_mie_i` waiver on the
+  core's port stays in place (Phase 2 interrupts).
+- `make sim MOD=rv32i_core_csr`: 125/125 PASS, "ALL TESTS PASSED"
+  (was 81/81 in 1.2.1).
+- `make sim MOD=csr_file`: 63/63 PASS (Phase 1.0 unchanged).
+- All 19 unit testbenches: PASS, no regression.
+- `cd tests && make run-all`: 37/37 PASS, all 37 cycle counts
+  byte-identical to `phase1.2.1-complete` after each of the three
+  RTL/TB commits. rv32ui programs do not contain misaligned
+  loads/stores or accesses to unmapped addresses (programs are
+  well-formed by design), so lighting up these four cause sources
+  produces zero drift on rv32ui — the load-bearing regression check
+  for this sub-phase.
+- `make sim-fpga-misaligned-load`: PASS, `PASS\r\n` end-to-end.
+- `make sim-fpga-misaligned-store`: PASS, `PASS\r\n` end-to-end with
+  the `*(0x00010024) = 0xCAFEBABE` sentinel preserved through the
+  SH-at-odd trap.
+- `make sim-fpga-access-fault`: PASS, `PASS\r\n` end-to-end with
+  the `t4 = 0xDEADBEEF` sentinel preserved through the LW-unmapped
+  trap. Implicit combinational-cycle smoke test: a hung or
+  oscillating loop would have prevented PASS from printing.
+- `make sim-fpga-{ecall,ebreak,illegal,misaligned,csr}`: all PASS
+  (1.2.0 + 1.2.1 + Phase 1.1 regressions — no change).
+
+### Surprises / notes for 1.2.3
+
+- **`trap_enter_w` reg → wire conversion.** Decided mid-refactor.
+  The 1.2.0/1.2.1 priority encoder set `trap_enter_w=1` at the head
+  of the always block then cleared it in the else branch — equivalent
+  to OR-of-cause-inputs. With pre_issue / at_issue intermediate
+  signals introduced explicitly, the OR became explicit too. The
+  always block is now cleaner (drives only cause_code / tval).
+  Encoder priority semantics unchanged.
+- **Mock bus-error vs. real interconnect.** The unit TB
+  (tb_rv32i_core_csr) uses a programmable bus-error mock + tb_dmem
+  model rather than instantiating the real `wb_interconnect`. The
+  end-to-end sim-fpga-access-fault test exercises the real
+  interconnect path. Both layers PASS, so the at-issue model is
+  validated against the real combinational `bus_error_o = unmapped`
+  inside `wb_interconnect.v`.
+- **Phase 4 dependency framing.** Two distinct assumptions
+  (combinational `bus_error_i` AND single-cycle bus completion)
+  filed as SEPARATE tech-debt entries. The handoff explicitly
+  flagged them as separable, and the failure modes are different
+  (one breaks regfile_we ordering; the other breaks bus protocol).
+  Filed accordingly per Decision 12 in the 1.2.2 handoff.
+- **Carve-out chain unchanged.** None of the four 1.2.2 cause
+  sources is in the SYSTEM-funct3=0 family. `illegal_inst_o` keeps
+  the 1.2.1 form (`csr_illegal | (illegal_system & ~ecall_m &
+  ~ebreak_m) | illegal_opcode`). MRET extends it in 1.2.3.
+- **Speculative `reg_write |= illegal_opcode` hardening NOT
+  pursued.** Per Decision 13 in the 1.2.2 handoff and project
+  convention "don't add code on speculation". Revisit only if a
+  future cause source actually requires it.
+
 ## 2026-05-07 (Phase 1.2.1)
 
 - [feat] Phase 1.2.1 — second sub-phase of the Phase 1.2 trap work. Lights

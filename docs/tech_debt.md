@@ -3,6 +3,90 @@
 Running ledger of known shortcomings that are real but deliberately
 deferred. Each item has a clear trigger for when it becomes urgent.
 
+## Phase 4 dependencies
+
+These two items were filed by Phase 1.2.2 against a pair of structural
+assumptions baked into the at-issue trap source composition (cause 5
+`load_access_fault` and cause 7 `store_access_fault`). They are
+SEPARATE dependencies — addressing one does not cover the other.
+
+### At-issue trap assumes `bus_error_i` is combinational
+
+**What's the assumption:** `load_access_fault` /
+`store_access_fault` fire on the same cycle as the offending
+`dmem_re` / `dmem_we`, because `bus_error_i` (sourced from
+`wb_interconnect.bus_error_o`) is a combinational function of the
+unmapped-address decode. The latch-side gates (`regfile_we`,
+`instret_tick`, gated on `~trap_enter_w`) catch the error before
+writeback / retirement.
+
+**Why deferred:** True today — Phase 1.2.2 wired this in under that
+assumption, and the rv32ui regression + access-fault tests confirm
+the model. Registering `bus_error_o` would buy an additional pipeline
+stage of timing slack but is not currently necessary on the Artix-7
+target.
+
+**Failure mode if the assumption breaks:** if `bus_error_o` becomes
+registered (e.g., for timing closure in Phase 4 or later), the at-issue
+gate becomes a latched-error model. `load_access_fault` would fire ONE
+CYCLE LATE, after the load's writeback has already happened — which
+makes the trap path spec-noncompliant: the regfile destination would
+already hold the (zero-valued) bus rdata when the trap entered.
+
+**Trigger to close:** any Phase 4 timing-closure work that touches
+`wb_interconnect.bus_error_o` or inserts a register on the path
+between it and `rv32i_core.bus_error_i`. Also: any new master/slave
+that decodes asynchronously and might want to register the error.
+
+**Sketch of fix:** if registration is needed, the at-issue source
+composition must move into a registered "trap pending" latch that
+accumulates the pending-cause + faulting-address state alongside
+the load's own pipeline stage, and the regfile_we / instret_tick
+gates must move to that downstream stage. This is a pipeline-stage
+restructuring, not a localized tweak. See `rtl/rv32i_core.v` at-issue
+gate comment and `docs/handoffs/PHASE1.2.2_HANDOFF.md` §2.b for the
+full rationale.
+
+---
+
+### At-issue trap assumes single-cycle bus completion (`WB_USE_STALL=0`)
+
+**What's the assumption:** `dmem_re` and `dmem_we` are driven for
+exactly one cycle, the bus completes the access (or auto-acks an
+unmapped one) within that cycle, and the next cycle the core is on
+to the next instruction. `wb_master.WB_USE_STALL` is defaulted off
+to make this explicit.
+
+**Why deferred:** Phase 1.2.2 wired the access-fault trap path under
+this assumption, and rv32ui exercises only single-cycle-completable
+addresses. Multi-cycle stall semantics are a Phase 4 pipeline concern.
+
+**Failure mode if the assumption breaks:** if `WB_USE_STALL=1` is
+enabled, the slave can hold off `wbm_ack_o` for multiple cycles. The
+core would need to keep `dmem_re` / `dmem_we` asserted across those
+cycles. But the pre-issue gate (`& ~pre_issue_trap_w`) suppresses
+them when a trap fires — and on a multi-cycle bus, a trap detected
+mid-transaction would deassert the request line before the slave
+acked. The slave's protocol contract is broken; downstream behavior
+is undefined.
+
+**Trigger to close:** any Phase 4 work that sets `WB_USE_STALL=1` on
+`wb_master`, or that introduces a slave that cannot complete in a
+single cycle (DDR controller, off-chip flash, etc.).
+
+**Sketch of fix:** the gate model must move from "suppress in the
+trap cycle" to "freeze for the duration of the in-flight access,
+then resolve". Concretely: a small bus-state FSM that holds the
+core's PC and `dmem_re`/`dmem_we` constant until ack arrives,
+sampling `bus_error_i` on the ack cycle. This is the same pipeline-
+stage restructuring noted in the previous item — the two
+dependencies share their resolution but are listed separately so a
+future engineer addressing one does not mistakenly assume the other
+is also covered. See `rtl/rv32i_core.v` at-issue gate comment and
+`docs/handoffs/PHASE1.2.2_HANDOFF.md` §2.b.
+
+---
+
 ## CI coverage for C builds — deferred from Phase 0.2
 
 **What's missing:** the GitHub Actions CI workflow lints RTL, runs
