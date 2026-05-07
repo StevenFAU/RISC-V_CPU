@@ -61,6 +61,11 @@ module tb_compliance;
     // leaving the outputs unconnected is sound. illegal_inst_o is unconsumed
     // (Phase 1.2 trap path); rv32ui programs use only allocated opcodes so it
     // never pulses.
+    //
+    // Phase 1.2.0 added the trap-entry output ports (trap_enter_o /
+    // trap_pc_o / trap_cause_o / trap_tval_o). Left unconnected here — no
+    // rv32ui test fires a synchronous trap, so trap_enter_o never asserts
+    // and the cycle counts stay byte-identical to the pre-1.2 baseline.
     /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core dut (
         .clk(clk), .rst(rst),
@@ -75,6 +80,9 @@ module tb_compliance;
         .csr_read_data_i(32'd0), .csr_illegal_i(1'b0),
         .instret_tick_o(),
         .illegal_inst_o(),
+        // Phase 1.2.0 trap-entry outputs (unused — no traps in rv32ui)
+        .trap_enter_o(), .trap_pc_o(),
+        .trap_cause_o(), .trap_tval_o(),
         .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );

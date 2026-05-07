@@ -78,16 +78,26 @@ module rv32i_core (
     // Retirement tick (drives csr_file.instret_tick)
     output wire        instret_tick_o,
 
-    // Illegal-instruction detection (unconnected at fpga_top in 1.1; consumed
-    // by the Phase 1.2 trap path)
+    // Illegal-instruction detection. Unconnected at fpga_top through 1.2.0
+    // (UNUSEDSIGNAL waiver on `core_illegal_inst` there); 1.2.1 wires it in
+    // as a cause source on the trap encoder.
     output wire        illegal_inst_o,
 
-    // Trap-related CSR outputs from csr_file, routed through for Phase 1.2's
-    // PC-redirect mux. Tied unused in 1.1; Step 2 of 1.2.0 lights up
-    // mtvec_i. mepc_i lights up at 1.2.2's MRET, mstatus_mie_i at Phase 2.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // Trap-entry outputs (Phase 1.2.0 Step 2). Drive csr_file's trap ports
+    // directly. `trap_return_o` is intentionally NOT here in 1.2.0 — MRET
+    // is Phase 1.2.2; csr_file.trap_return stays tied 1'b0 at fpga_top.
+    output wire        trap_enter_o,
+    output wire [31:0] trap_pc_o,
+    output wire [31:0] trap_cause_o,
+    output wire [31:0] trap_tval_o,
+
+    // Trap-related CSR outputs from csr_file. mtvec_i is consumed by the
+    // PC-mux's trap-entry select (1.2.0 Step 2); mepc_i is wired into the
+    // mux but dead-pathed (1.2.2's MRET activates it); mstatus_mie_i is
+    // still unused in 1.2.0 (Phase 2 interrupts).
     input  wire [31:0] mtvec_i,
     input  wire [31:0] mepc_i,
+    /* verilator lint_off UNUSEDSIGNAL */
     input  wire        mstatus_mie_i,
     /* verilator lint_on UNUSEDSIGNAL */
 
@@ -144,12 +154,20 @@ module rv32i_core (
     // =========================================================================
     // Bus outputs
     // =========================================================================
+    // Bus-write/read enables are gated on `!trap_enter_w` so a trapping
+    // instruction issues no DMEM transaction on the cycle it traps. For
+    // ECALL the gating is a structural no-op (decode already drives
+    // mem_write=mem_read=0 on SYSTEM-funct3=0), but the gate is in place
+    // for 1.2.1's misaligned-load/store and bus-error trap sources, where
+    // the trapping instruction is a real load/store with mem_write/
+    // mem_read=1 — those will become trivial encoder-input changes once
+    // the gate exists.
     assign imem_addr      = pc_current;
     assign imem_addr_next = rst ? 32'd0 : pc_next;
     assign dmem_addr      = alu_result;
     assign dmem_wdata   = rs2_data;
-    assign dmem_we      = mem_write;
-    assign dmem_re      = mem_read;
+    assign dmem_we      = mem_write & ~trap_enter_w;
+    assign dmem_re      = mem_read  & ~trap_enter_w;
     assign dmem_funct3  = funct3;
 
     // =========================================================================
@@ -191,11 +209,18 @@ module rv32i_core (
                          (pc_current + imm);  // JAL
 
     // =========================================================================
-    // PC-next mux
+    // PC-next mux — Phase 1.2.0 Step 2 extends with trap-entry / trap-return
+    // inputs. Trap entry takes highest priority (overrides branch and jump
+    // on the same cycle); trap-return is dead-pathed in 1.2.0 (the select
+    // is a literal 1'b0) and lights up in 1.2.2 by replacing that literal
+    // with the real `trap_return` signal.
     // =========================================================================
-    assign pc_next = ctrl_jump    ? jump_target :
-                     branch_taken ? branch_target :
-                     pc_plus4;
+    wire trap_return_select_dead = 1'b0;  // 1.2.2: replace with trap_return signal
+    assign pc_next = trap_enter_w             ? mtvec_i :
+                     trap_return_select_dead  ? mepc_i :
+                     ctrl_jump                ? jump_target :
+                     branch_taken             ? branch_target :
+                                                pc_plus4;
 
     // =========================================================================
     // ALU input muxes
@@ -300,15 +325,14 @@ module rv32i_core (
     wire [31:0] trap_tval_w  = 32'b0;          // ECALL/EBREAK have tval=0
     wire [31:0] trap_pc_w    = pc_current;
 
-    // Step 1 of 1.2.0: encoder outputs are computed but not yet consumed.
-    // Step 2 routes them into the PC-mux and up to fpga_top, at which
-    // point this waiver block goes away.
-    /* verilator lint_off UNUSEDSIGNAL */
-    wire        trap_enter_unused = trap_enter_w;
-    wire [31:0] trap_pc_unused    = trap_pc_w;
-    wire [31:0] trap_cause_unused = trap_cause_w;
-    wire [31:0] trap_tval_unused  = trap_tval_w;
-    /* verilator lint_on UNUSEDSIGNAL */
+    // Step 2 of 1.2.0: encoder outputs are routed both to the PC-mux above
+    // (mtvec_i select on trap_enter_w) and out to fpga_top via the new
+    // top-level trap-entry ports below. The PC-mux trap-entry select takes
+    // priority over branch/jump per the encoder placement above.
+    assign trap_enter_o = trap_enter_w;
+    assign trap_pc_o    = trap_pc_w;
+    assign trap_cause_o = trap_cause_w;
+    assign trap_tval_o  = trap_tval_w;
 
     // =========================================================================
     // Phase 1.1 — illegal-instruction detection + retirement tick
@@ -324,9 +348,12 @@ module rv32i_core (
     // source on the trap encoder.
     assign illegal_inst_o = csr_illegal_i | (illegal_system & ~ecall_m) | illegal_opcode;
 
-    // Single-cycle core retires every non-reset cycle. Step 2 of 1.2.0
-    // gates this on !trap_enter so a trapping instruction does not retire.
-    assign instret_tick_o = !rst;
+    // Single-cycle core retires every non-reset cycle, EXCEPT on a trap-
+    // entry cycle: the trapping instruction did not retire, so minstret
+    // must not advance. mcycle continues to tick in csr_file
+    // (trap-entry-independent free-running counter — see csr_file.v
+    // mcycle_reg block).
+    assign instret_tick_o = !rst & ~trap_enter_w;
 
     // =========================================================================
     // Module instances
@@ -339,9 +366,15 @@ module rv32i_core (
         .pc(pc_current)
     );
 
+    // regfile write-enable is gated on `!trap_enter_w` so a trapping
+    // instruction does not write its rd. For ECALL the gating is a no-op
+    // (decode sets reg_write=0 since is_csr=0 on funct3=000), but the gate
+    // is in place for 1.2.1's illegal-instruction trap source where the
+    // trapping opcode could carry an rd field that decode would otherwise
+    // honor.
     regfile u_regfile (
         .clk(clk),
-        .we(reg_write),
+        .we(reg_write & ~trap_enter_w),
         .rs1_addr(rs1_addr),
         .rs2_addr(rs2_addr),
         .rd_addr(rd_addr),

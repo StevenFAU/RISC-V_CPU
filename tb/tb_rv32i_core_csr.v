@@ -70,6 +70,12 @@ module tb_rv32i_core_csr;
     wire [31:0] csr_mtvec, csr_mepc;
     wire        csr_mstatus_mie;
 
+    // Phase 1.2.0 trap-entry signals from core to csr_file
+    wire        trap_enter;
+    wire [31:0] trap_pc;
+    wire [31:0] trap_cause;
+    wire [31:0] trap_tval;
+
     // -------------------------------------------------------------------------
     // IMEM read: combinational, word-addressed.
     // imem_addr[31:2] indexes mem[]. PC stays small (<= 50 bytes) for these
@@ -103,6 +109,10 @@ module tb_rv32i_core_csr;
         .csr_illegal_i(csr_illegal),
         .instret_tick_o(instret_tick),
         .illegal_inst_o(illegal_inst),
+        .trap_enter_o(trap_enter),
+        .trap_pc_o(trap_pc),
+        .trap_cause_o(trap_cause),
+        .trap_tval_o(trap_tval),
         .mtvec_i(csr_mtvec),
         .mepc_i(csr_mepc),
         .mstatus_mie_i(csr_mstatus_mie),
@@ -110,7 +120,9 @@ module tb_rv32i_core_csr;
     );
 
     // -------------------------------------------------------------------------
-    // DUT — csr_file (trap inputs tied 0; matches Phase 1.1 fpga_top wiring)
+    // DUT — csr_file (Phase 1.2.0: trap-entry inputs now driven by the core's
+    // trap encoder, mirroring fpga_top wiring; trap_return stays tied 0
+    // until 1.2.2's MRET decode lands)
     // -------------------------------------------------------------------------
     /* verilator lint_off PINCONNECTEMPTY */
     csr_file u_csr_file (
@@ -121,10 +133,10 @@ module tb_rv32i_core_csr;
         .csr_write_data(csr_write_data),
         .csr_read_data(csr_read_data),
         .csr_illegal(csr_illegal),
-        .trap_enter(1'b0),
-        .trap_pc(32'd0),
-        .trap_cause(32'd0),
-        .trap_tval(32'd0),
+        .trap_enter(trap_enter),
+        .trap_pc(trap_pc),
+        .trap_cause(trap_cause),
+        .trap_tval(trap_tval),
         .trap_return(1'b0),
         .instret_tick(instret_tick),
         .mtvec_o(csr_mtvec),

@@ -124,12 +124,21 @@ module fpga_top #(
     wire [31:0] csr_mtvec;
     wire [31:0] csr_mepc;
     wire        csr_mstatus_mie;
-    // illegal_inst_o from core: dangling here in Phase 1.1 (Phase 1.2 wires
-    // it into the trap-entry FSM).
+    // illegal_inst_o from core: dangling here through 1.2.0; Phase 1.2.1
+    // consumes it as a cause source on the trap encoder.
     /* verilator lint_off UNUSEDSIGNAL */
     wire        core_illegal_inst;
     /* verilator lint_on UNUSEDSIGNAL */
     // mstatus_o from csr_file is debug visibility only — leave unconnected.
+
+    // Phase 1.2.0: trap-entry signals from core to csr_file. Step 2 lights
+    // these up; trap_return stays tied 1'b0 at u_csr_file until 1.2.2's
+    // MRET decode lands. csr_file already enforces the
+    // trap_enter > trap_return > csr_write_op priority internally.
+    wire        core_trap_enter;
+    wire [31:0] core_trap_pc;
+    wire [31:0] core_trap_cause;
+    wire [31:0] core_trap_tval;
 
     // =========================================================================
     // CPU Core
@@ -150,6 +159,11 @@ module fpga_top #(
         .csr_illegal_i(csr_illegal),
         .instret_tick_o(core_instret_tick),
         .illegal_inst_o(core_illegal_inst),
+        // Phase 1.2.0 trap-entry outputs to csr_file
+        .trap_enter_o(core_trap_enter),
+        .trap_pc_o(core_trap_pc),
+        .trap_cause_o(core_trap_cause),
+        .trap_tval_o(core_trap_tval),
         .mtvec_i(csr_mtvec),
         .mepc_i(csr_mepc),
         .mstatus_mie_i(csr_mstatus_mie),
@@ -157,10 +171,11 @@ module fpga_top #(
     );
 
     // =========================================================================
-    // CSR File (Phase 1.1)
+    // CSR File (Phase 1.1 + 1.2.0)
     // =========================================================================
-    // Trap entry/exit are tied 0 in 1.1; Phase 1.2's trap FSM drives them.
-    // mstatus_o is debug-only; leave unconnected.
+    // Phase 1.2.0 Step 2: trap-entry inputs are now driven by the core's
+    // trap encoder. trap_return stays tied 1'b0 — 1.2.2's MRET decode is
+    // its consumer. mstatus_o is debug-only; leave unconnected.
     /* verilator lint_off PINCONNECTEMPTY */
     csr_file u_csr_file (
         .clk(clk), .rst(rst),
@@ -171,15 +186,16 @@ module fpga_top #(
         .csr_write_data(core_csr_write_data),
         .csr_read_data(csr_read_data),
         .csr_illegal(csr_illegal),
-        // Trap entry/return — Phase 1.2
-        .trap_enter(1'b0),
-        .trap_pc(32'd0),
-        .trap_cause(32'd0),
-        .trap_tval(32'd0),
+        // Trap entry — Phase 1.2.0 Step 2
+        .trap_enter(core_trap_enter),
+        .trap_pc(core_trap_pc),
+        .trap_cause(core_trap_cause),
+        .trap_tval(core_trap_tval),
+        // Trap return (MRET) — Phase 1.2.2
         .trap_return(1'b0),
-        // Retirement tick from core
+        // Retirement tick from core (gated on !trap_enter inside the core)
         .instret_tick(core_instret_tick),
-        // Outputs to core (consumed by Phase 1.2 PC-redirect mux)
+        // Outputs to core (consumed by 1.2.0's PC-redirect mux)
         .mtvec_o(csr_mtvec),
         .mepc_o(csr_mepc),
         .mstatus_mie_o(csr_mstatus_mie),

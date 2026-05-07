@@ -34,6 +34,9 @@ module tb_rv32i_core;
     // doesn't use CSR instructions; tie inputs safely and leave outputs
     // unconnected. The dedicated tb_rv32i_core_csr.v exercises the integrated
     // core+csr_file path.
+    //
+    // Phase 1.2.0 added the trap-entry output ports — left unconnected here;
+    // test_basic.S doesn't trap.
     /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core uut (
         .clk(clk), .rst(rst),
@@ -47,6 +50,8 @@ module tb_rv32i_core;
         .csr_read_data_i(32'd0), .csr_illegal_i(1'b0),
         .instret_tick_o(),
         .illegal_inst_o(),
+        .trap_enter_o(), .trap_pc_o(),
+        .trap_cause_o(), .trap_tval_o(),
         .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
