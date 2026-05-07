@@ -224,6 +224,28 @@ module rv32i_core (
                     (branch_taken && (branch_target[1:0] != 2'b00));
 
     // =========================================================================
+    // Phase 1.2.2 — Load / Store address-misalignment detection
+    // =========================================================================
+    // Combinational on the LSU-computed `dmem_addr`. Per-instruction width
+    // check: LW/SW require addr[1:0]==0; LH/LHU/SH require addr[0]==0;
+    // LB/LBU/SB never misalign (byte access). The mem_read/mem_write
+    // qualifiers prevent non-LSU instructions (whose `dmem_addr` carries
+    // arbitrary bits) from tripping the detection.
+    //
+    // mtval for these causes is `dmem_addr` itself — the misaligned address
+    // (NOT masked to alignment). csr_file does not mask trap_tval.
+    wire load_addr_misaligned_w =
+            mem_read & (
+                ((funct3 == `F3_WORD)                              && (dmem_addr[1:0] != 2'b00)) ||
+                (((funct3 == `F3_HALF) || (funct3 == `F3_HALFU))   && (dmem_addr[0]   != 1'b0))
+            );
+    wire store_addr_misaligned_w =
+            mem_write & (
+                ((funct3 == `F3_WORD) && (dmem_addr[1:0] != 2'b00)) ||
+                ((funct3 == `F3_HALF) && (dmem_addr[0]   != 1'b0))
+            );
+
+    // =========================================================================
     // PC-next mux — Phase 1.2.0 Step 2 extends with trap-entry / trap-return
     // inputs. Trap entry takes highest priority (overrides branch and jump
     // on the same cycle); trap-return is dead-pathed in 1.2.0 (the select
@@ -314,10 +336,10 @@ module rv32i_core (
     wire trap_inst_addr_misaligned  = inst_addr_misaligned_w;
     wire trap_illegal_inst          = illegal_inst_o;
     wire trap_ebreak                = ebreak_m;
-    wire trap_load_addr_misaligned  = 1'b0;  // 1.2.2: LH addr[0] | LW addr[1:0]
-    wire trap_load_access_fault     = 1'b0;  // 1.2.2: bus_error_o & load
-    wire trap_store_addr_misaligned = 1'b0;  // 1.2.2: SH/SW analogous
-    wire trap_store_access_fault    = 1'b0;  // 1.2.2: bus_error_o & store
+    wire trap_load_addr_misaligned  = load_addr_misaligned_w;
+    wire trap_load_access_fault     = 1'b0;  // 1.2.2 Step 2: bus_error_i & load (post-gate)
+    wire trap_store_addr_misaligned = store_addr_misaligned_w;
+    wire trap_store_access_fault    = 1'b0;  // 1.2.2 Step 2: bus_error_i & store (post-gate)
     wire trap_ecall_m               = ecall_m;
 
     // Combinational priority encoder. Lowest-index cause wins, matching
@@ -342,16 +364,16 @@ module rv32i_core (
             trap_tval_w     = 32'b0;            // per spec
         end else if (trap_load_addr_misaligned) begin
             trap_cause_code = 4'd4;
-            trap_tval_w     = 32'b0;            // 1.2.2: faulting load addr
+            trap_tval_w     = dmem_addr;        // misaligned load address
         end else if (trap_load_access_fault) begin
             trap_cause_code = 4'd5;
-            trap_tval_w     = 32'b0;            // 1.2.2: faulting load addr
+            trap_tval_w     = dmem_addr;        // unmapped load address
         end else if (trap_store_addr_misaligned) begin
             trap_cause_code = 4'd6;
-            trap_tval_w     = 32'b0;            // 1.2.2: faulting store addr
+            trap_tval_w     = dmem_addr;        // misaligned store address
         end else if (trap_store_access_fault) begin
             trap_cause_code = 4'd7;
-            trap_tval_w     = 32'b0;            // 1.2.2: faulting store addr
+            trap_tval_w     = dmem_addr;        // unmapped store address
         end else if (trap_ecall_m) begin
             trap_cause_code = 4'd11;
             trap_tval_w     = 32'b0;            // per spec
