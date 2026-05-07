@@ -124,11 +124,10 @@ module fpga_top #(
     wire [31:0] csr_mtvec;
     wire [31:0] csr_mepc;
     wire        csr_mstatus_mie;
-    // illegal_inst_o from core: dangling here through 1.2.0; Phase 1.2.1
-    // consumes it as a cause source on the trap encoder.
-    /* verilator lint_off UNUSEDSIGNAL */
-    wire        core_illegal_inst;
-    /* verilator lint_on UNUSEDSIGNAL */
+    // illegal_inst_o from core: consumed inside the core itself in 1.2.1 as
+    // the encoder's `illegal_inst` cause source. No fpga_top-level consumer
+    // — the port is left empty on the core instance below (under the
+    // PINCONNECTEMPTY scope around u_core).
     // mstatus_o from csr_file is debug visibility only — leave unconnected.
 
     // Phase 1.2.0: trap-entry signals from core to csr_file. Step 2 lights
@@ -143,6 +142,7 @@ module fpga_top #(
     // =========================================================================
     // CPU Core
     // =========================================================================
+    /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core u_core (
         .clk(clk), .rst(rst),
         .imem_addr(imem_addr), .imem_data(imem_data),
@@ -158,7 +158,10 @@ module fpga_top #(
         .csr_read_data_i(csr_read_data),
         .csr_illegal_i(csr_illegal),
         .instret_tick_o(core_instret_tick),
-        .illegal_inst_o(core_illegal_inst),
+        // illegal_inst_o consumed internally by the trap encoder; no
+        // top-level consumer (the trap_enter / trap_cause outputs already
+        // expose the resulting trap state).
+        .illegal_inst_o(/* unconnected */),
         // Phase 1.2.0 trap-entry outputs to csr_file
         .trap_enter_o(core_trap_enter),
         .trap_pc_o(core_trap_pc),
@@ -169,6 +172,7 @@ module fpga_top #(
         .mstatus_mie_i(csr_mstatus_mie),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // =========================================================================
     // CSR File (Phase 1.1 + 1.2.0)

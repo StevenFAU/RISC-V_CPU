@@ -78,9 +78,10 @@ module rv32i_core (
     // Retirement tick (drives csr_file.instret_tick)
     output wire        instret_tick_o,
 
-    // Illegal-instruction detection. Unconnected at fpga_top through 1.2.0
-    // (UNUSEDSIGNAL waiver on `core_illegal_inst` there); 1.2.1 wires it in
-    // as a cause source on the trap encoder.
+    // Illegal-instruction detection. Consumed internally by the trap
+    // encoder's `illegal_inst` cause-source input (1.2.1); left empty on
+    // the fpga_top instance — the trap_*_o ports already expose the
+    // resulting trap state to the top.
     output wire        illegal_inst_o,
 
     // Trap-entry outputs (Phase 1.2.0 Step 2). Drive csr_file's trap ports
@@ -273,16 +274,22 @@ module rv32i_core (
     // Phase 1.2.0 — ECALL decode + cause-priority encoder (skeleton)
     // =========================================================================
     // ECALL: SYSTEM (opcode 0x73), funct3=000, imm12=0x000, rs1=0, rd=0.
+    // EBREAK: SYSTEM (opcode 0x73), funct3=000, imm12=0x001, rs1=0, rd=0.
     // Decoded inline here rather than threading another funct12-aware path
     // through control.v: control.v already collapses funct3=000 into
     // illegal_system, and the rs1/rd/imm12 fields are already plumbed at
-    // this level. EBREAK (imm12=0x001) and MRET (imm12=0x302) stay illegal
-    // until 1.2.1 / 1.2.2 take them over.
+    // this level. MRET (imm12=0x302) stays illegal until 1.2.3 carves it
+    // out of the chain below.
     wire ecall_m = (opcode == `OP_SYSTEM)
                 && (funct3 == 3'b000)
                 && (csr_addr_f == 12'h000)
                 && (rs1_addr == 5'b0)
                 && (rd_addr == 5'b0);
+    wire ebreak_m = (opcode == `OP_SYSTEM)
+                 && (funct3 == 3'b000)
+                 && (csr_addr_f == 12'h001)
+                 && (rs1_addr == 5'b0)
+                 && (rd_addr == 5'b0);
 
     // Cause-priority encoder inputs — all eight declared per the "design
     // for all consumers at module creation" principle. Only ecall_m drives
@@ -290,13 +297,13 @@ module rv32i_core (
     // by replacing the literal-zero ties with the real signal sources.
     // Cause codes match RISC-V Privileged spec; priority order also matches
     // (highest to lowest in the encoder's if/else chain below).
-    wire trap_inst_addr_misaligned  = 1'b0;  // 1.2.1: branch/jump target [1:0] != 0
-    wire trap_illegal_inst          = 1'b0;  // 1.2.1: from illegal_inst_o
-    wire trap_ebreak                = 1'b0;  // 1.2.1: SYSTEM funct3=0 imm12=0x001
-    wire trap_load_addr_misaligned  = 1'b0;  // 1.2.1: LH addr[0] | LW addr[1:0]
-    wire trap_load_access_fault     = 1'b0;  // 1.2.1: bus_error_o & load
-    wire trap_store_addr_misaligned = 1'b0;  // 1.2.1: SH/SW analogous
-    wire trap_store_access_fault    = 1'b0;  // 1.2.1: bus_error_o & store
+    wire trap_inst_addr_misaligned  = 1'b0;  // 1.2.1 Step 2: branch/jump target [1:0] != 0
+    wire trap_illegal_inst          = illegal_inst_o;
+    wire trap_ebreak                = ebreak_m;
+    wire trap_load_addr_misaligned  = 1'b0;  // 1.2.2: LH addr[0] | LW addr[1:0]
+    wire trap_load_access_fault     = 1'b0;  // 1.2.2: bus_error_o & load
+    wire trap_store_addr_misaligned = 1'b0;  // 1.2.2: SH/SW analogous
+    wire trap_store_access_fault    = 1'b0;  // 1.2.2: bus_error_o & store
     wire trap_ecall_m               = ecall_m;
 
     // Combinational priority encoder. Lowest-index cause wins, matching
@@ -339,14 +346,18 @@ module rv32i_core (
     // =========================================================================
     // illegal_inst_o is the OR of:
     //   * csr_illegal_i  — CSR-file detected RO write or unimplemented addr
-    //   * illegal_system — SYSTEM funct3=0 (ECALL/EBREAK/MRET/WFI), MASKED
-    //     by ecall_m so legal ECALLs no longer raise illegal. EBREAK / MRET
-    //     / unknown SYSTEM-funct3=0 encodings still pulse illegal here
-    //     until 1.2.1 / 1.2.2 take them over.
+    //   * illegal_system — SYSTEM funct3=0 (ECALL/EBREAK/MRET/WFI), with
+    //     legal SYSTEM funct3=0 encodings carved out one at a time:
+    //       ECALL  carved out 1.2.0 (& ~ecall_m)
+    //       EBREAK carved out 1.2.1 (& ~ebreak_m)
+    //       MRET   will be carved out 1.2.3 (& ~mret_m)
+    //     Future SYSTEM funct3=0 instructions (FENCE.I, future Zicsr/Zihint
+    //     encodings) must extend this chain explicitly — do not let them
+    //     silently inherit "is legal" by being unrecognized, and do not let
+    //     them silently inherit "is illegal" by failing to carve out.
     //   * illegal_opcode — unrecognized opcode at the decoder default branch
-    // Unconnected at fpga_top in 1.1/1.2.0; 1.2.1 wires it in as a cause
-    // source on the trap encoder.
-    assign illegal_inst_o = csr_illegal_i | (illegal_system & ~ecall_m) | illegal_opcode;
+    // Now consumed in 1.2.1 as the encoder's `illegal_inst` cause source.
+    assign illegal_inst_o = csr_illegal_i | (illegal_system & ~ecall_m & ~ebreak_m) | illegal_opcode;
 
     // Single-cycle core retires every non-reset cycle, EXCEPT on a trap-
     // entry cycle: the trapping instruction did not retire, so minstret
