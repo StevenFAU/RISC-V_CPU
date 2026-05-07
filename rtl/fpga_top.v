@@ -139,6 +139,11 @@ module fpga_top #(
     wire [31:0] core_trap_cause;
     wire [31:0] core_trap_tval;
 
+    // Phase 1.2.2: bus-error sideband from wb_interconnect routes into the
+    // core's at-issue trap-source composition (load_access_fault /
+    // store_access_fault). Combinational, same-cycle as the bad access.
+    wire        ic_bus_error;
+
     // =========================================================================
     // CPU Core
     // =========================================================================
@@ -170,6 +175,8 @@ module fpga_top #(
         .mtvec_i(csr_mtvec),
         .mepc_i(csr_mepc),
         .mstatus_mie_i(csr_mstatus_mie),
+        // Phase 1.2.2 at-issue trap source
+        .bus_error_i(ic_bus_error),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
     /* verilator lint_on PINCONNECTEMPTY */
@@ -239,9 +246,8 @@ module fpga_top #(
     // =========================================================================
     // Wishbone Interconnect
     // =========================================================================
-    // bus_error_o deliberately unconnected here — Phase 1's load/store
-    // access-fault trap is the consumer, per docs/phase0_changelog.md.
-    /* verilator lint_off PINCONNECTEMPTY */
+    // Phase 1.2.2: bus_error_o is now consumed — wired into the core's
+    // at-issue trap source composition (cause 5 / cause 7).
     wb_interconnect u_wb_ic (
         .wbm_cyc_i(wb_cyc), .wbm_stb_i(wb_stb), .wbm_we_i(wb_we),
         .wbm_adr_i(wb_adr), .wbm_dat_i(wb_dat_m2s), .wbm_sel_i(wb_sel),
@@ -264,10 +270,9 @@ module fpga_top #(
         .wbs3_cyc_o(wbs3_cyc), .wbs3_stb_o(wbs3_stb), .wbs3_we_o(wbs3_we),
         .wbs3_adr_o(wbs3_adr), .wbs3_dat_o(wbs3_dat_m2s), .wbs3_sel_o(wbs3_sel),
         .wbs3_dat_i(wbs3_dat_s2m), .wbs3_ack_i(wbs3_ack),
-        // bus_error_o unconnected — consumed by access-fault trap in Phase 1
-        .bus_error_o(/* unconnected */)
+        // Phase 1.2.2: bus_error_o consumed by core at-issue trap path
+        .bus_error_o(ic_bus_error)
     );
-    /* verilator lint_on PINCONNECTEMPTY */
 
     // =========================================================================
     // Data Memory (Wishbone Slave 0)

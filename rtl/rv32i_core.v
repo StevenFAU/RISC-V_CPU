@@ -102,6 +102,13 @@ module rv32i_core (
     input  wire        mstatus_mie_i,
     /* verilator lint_on UNUSEDSIGNAL */
 
+    // Phase 1.2.2 — bus-error sideband from wb_interconnect. Asserts
+    // combinationally on the same cycle as the load/store transaction
+    // when the address decodes to no slave (unmapped). Consumed by the
+    // at-issue trap source composition for cause 5 (load_access_fault)
+    // and cause 7 (store_access_fault).
+    input  wire        bus_error_i,
+
     // Debug/RVFI access to architectural state
     output wire [31:0] debug_pc,
     output wire [31:0] debug_instr
@@ -153,22 +160,42 @@ module rv32i_core (
     wire [11:0] csr_addr_f   = instr[31:20];   // CSR address field for CSR insts
 
     // =========================================================================
-    // Bus outputs
+    // Bus outputs — Phase 1.2.2 pre-issue/at-issue gate split
     // =========================================================================
-    // Bus-write/read enables are gated on `!trap_enter_w` so a trapping
-    // instruction issues no DMEM transaction on the cycle it traps. For
-    // ECALL the gating is a structural no-op (decode already drives
-    // mem_write=mem_read=0 on SYSTEM-funct3=0), but the gate is in place
-    // for 1.2.1's misaligned-load/store and bus-error trap sources, where
-    // the trapping instruction is a real load/store with mem_write/
-    // mem_read=1 — those will become trivial encoder-input changes once
-    // the gate exists.
+    // dmem_re / dmem_we are gated on `~pre_issue_trap_w` (NOT `~trap_enter_w`).
+    // Pre-issue traps (ECALL / EBREAK / illegal_inst / inst_addr_misaligned /
+    // load_addr_misaligned / store_addr_misaligned) are detected before the
+    // bus is even consulted, so suppressing the issue is correct.
+    //
+    // At-issue traps (load_access_fault / store_access_fault) are detected
+    // FROM bus_error_i, which itself requires dmem_re / dmem_we to be
+    // asserted for the bus to attempt the access. Gating dmem_re / dmem_we
+    // on at_issue_trap_w would create a combinational cycle (bus_error_i
+    // would never assert and access faults would silently NOP). So the
+    // gates here use only pre_issue_trap_w; the at-issue path catches the
+    // error before regfile_we / instret_tick latch.
+    //
+    // regfile_we and instret_tick (below) keep gating on the full
+    // trap_enter_w — they are latch-side gates, not issue-side.
+    //
+    // at-issue trap detection assumes bus_error_i is combinational.
+    // If bus_error_i becomes registered (e.g., for timing closure), this
+    // gate becomes a latched-error model: load_access_fault would fire
+    // one cycle late, after writeback has already happened.
+    //
+    // This sub-phase also assumes single-cycle bus completion
+    // (wb_master.WB_USE_STALL=0). If the bus becomes multi-cycle,
+    // dmem_re/dmem_we would need to remain asserted across cycles, but
+    // pre_issue_trap_w suppresses them — the bus protocol would break.
+    //
+    // Both dependencies are filed in docs/tech_debt.md. See
+    // docs/handoffs/PHASE1.2.2_HANDOFF.md for full rationale.
     assign imem_addr      = pc_current;
     assign imem_addr_next = rst ? 32'd0 : pc_next;
     assign dmem_addr      = alu_result;
     assign dmem_wdata   = rs2_data;
-    assign dmem_we      = mem_write & ~trap_enter_w;
-    assign dmem_re      = mem_read  & ~trap_enter_w;
+    assign dmem_we      = mem_write & ~pre_issue_trap_w;
+    assign dmem_re      = mem_read  & ~pre_issue_trap_w;
     assign dmem_funct3  = funct3;
 
     // =========================================================================
@@ -333,26 +360,49 @@ module rv32i_core (
     // by replacing the literal-zero ties with the real signal sources.
     // Cause codes match RISC-V Privileged spec; priority order also matches
     // (highest to lowest in the encoder's if/else chain below).
+    // Phase 1.2.2 — pre-issue trap composition. All causes detected before
+    // the bus is consulted. Used to gate dmem_re / dmem_we so a trapping
+    // load/store does not initiate a bus transaction.
+    wire pre_issue_trap_w = inst_addr_misaligned_w
+                          | illegal_inst_o
+                          | ebreak_m
+                          | load_addr_misaligned_w
+                          | store_addr_misaligned_w
+                          | ecall_m;
+
+    // Phase 1.2.2 — at-issue trap source composition. dmem_re / dmem_we
+    // here are the GATED forms (post `~pre_issue_trap_w`), so a misaligned
+    // load/store deasserts them before the bus sees the address. The
+    // ~load_addr_misaligned_w / ~store_addr_misaligned_w qualifiers make
+    // the mutual exclusion local to the gate definition rather than
+    // depending on encoder priority — defense in depth at zero cost.
+    wire load_access_fault_w  = bus_error_i & dmem_re & ~load_addr_misaligned_w;
+    wire store_access_fault_w = bus_error_i & dmem_we & ~store_addr_misaligned_w;
+
+    wire at_issue_trap_w = load_access_fault_w | store_access_fault_w;
+
     wire trap_inst_addr_misaligned  = inst_addr_misaligned_w;
     wire trap_illegal_inst          = illegal_inst_o;
     wire trap_ebreak                = ebreak_m;
     wire trap_load_addr_misaligned  = load_addr_misaligned_w;
-    wire trap_load_access_fault     = 1'b0;  // 1.2.2 Step 2: bus_error_i & load (post-gate)
+    wire trap_load_access_fault     = load_access_fault_w;
     wire trap_store_addr_misaligned = store_addr_misaligned_w;
-    wire trap_store_access_fault    = 1'b0;  // 1.2.2 Step 2: bus_error_i & store (post-gate)
+    wire trap_store_access_fault    = store_access_fault_w;
     wire trap_ecall_m               = ecall_m;
 
     // Combinational priority encoder. Lowest-index cause wins, matching
     // Decision 3 from docs/handoffs/phase1_context.md (RISC-V spec order).
     // The same priority chain also selects trap_tval — co-driven here so
-    // the cause/tval pair is always consistent. Per §4.2 of the 1.2.1
-    // handoff, all eight cause→tval pairs are declared (skeleton-first);
-    // four are driven this sub-phase, four are tied 32'b0 until 1.2.2.
-    reg        trap_enter_w;
+    // the cause/tval pair is always consistent.
+    //
+    // Phase 1.2.2: trap_enter_w is now a continuous assign of
+    // (pre_issue_trap_w | at_issue_trap_w) so the structural split is
+    // explicit at the trap-entry signal itself. The always block drives
+    // only trap_cause_code and trap_tval_w from the priority chain.
+    wire       trap_enter_w = pre_issue_trap_w | at_issue_trap_w;
     reg [3:0]  trap_cause_code;
     reg [31:0] trap_tval_w;
     always @(*) begin
-        trap_enter_w = 1'b1;
         if (trap_inst_addr_misaligned) begin
             trap_cause_code = 4'd0;
             trap_tval_w     = misaligned_target;
@@ -380,7 +430,6 @@ module rv32i_core (
         end else begin
             trap_cause_code = 4'd0;
             trap_tval_w     = 32'b0;
-            trap_enter_w    = 1'b0;
         end
     end
 

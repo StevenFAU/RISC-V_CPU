@@ -53,6 +53,7 @@ module tb_rv32i_core;
         .trap_enter_o(), .trap_pc_o(),
         .trap_cause_o(), .trap_tval_o(),
         .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
+        .bus_error_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
     /* verilator lint_on PINCONNECTEMPTY */

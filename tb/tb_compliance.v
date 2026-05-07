@@ -84,6 +84,10 @@ module tb_compliance;
         .trap_enter_o(), .trap_pc_o(),
         .trap_cause_o(), .trap_tval_o(),
         .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
+        // Phase 1.2.2: rv32ui programs only access mapped DMEM, so the
+        // at-issue access-fault path never fires. Tie off so the cause
+        // source resolves to 0 deterministically.
+        .bus_error_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
     /* verilator lint_on PINCONNECTEMPTY */

@@ -100,13 +100,50 @@ module tb_rv32i_core_csr;
     // -------------------------------------------------------------------------
     assign imem_data = mem[imem_addr[31:2]];
 
-    // DMEM tied off — no test sequence executes a load/store.
-    assign dmem_rdata = 32'd0;
+    // -------------------------------------------------------------------------
+    // Phase 1.2.2 — DMEM model + bus-error mock for access-fault tests.
+    //
+    // Pre-1.2.2 tests do not issue loads/stores; dmem_rdata stays 0 and
+    // bus_error_mock stays 0. The 1.2.2 access-fault tests flip
+    // `bus_err_active` and set [bus_err_lo, bus_err_hi]; the mock then
+    // asserts on a gated load/store whose addr falls in that window. The
+    // store_addr_misaligned sentinel test uses the small DMEM model below
+    // — directly observable storage proves dmem_we was suppressed.
+    // -------------------------------------------------------------------------
+    localparam DMEM_WORDS = 64;
+    reg  [31:0] tb_dmem [0:DMEM_WORDS-1];
+    wire [31:0] tb_dmem_rdata = tb_dmem[dmem_addr[31:2] & (DMEM_WORDS-1)];
     wire [31:0] dmem_rdata;
-    /* verilator lint_off UNUSEDSIGNAL */
-    wire dmem_re_unused = dmem_re;
-    wire dmem_we_unused = dmem_we;
-    /* verilator lint_on UNUSEDSIGNAL */
+
+    // Bus-error mock — externally programmable per test.
+    reg         bus_err_active;
+    reg  [31:0] bus_err_lo;
+    reg  [31:0] bus_err_hi;
+    wire        bus_error_mock = bus_err_active
+                              & (dmem_re | dmem_we)
+                              & (dmem_addr >= bus_err_lo)
+                              & (dmem_addr <= bus_err_hi);
+
+    // dmem_rdata: returns DMEM contents on aligned loads inside the model
+    // window (low word indexes); returns 0 elsewhere. Aligned to allow
+    // store-then-read sentinel checks. Loads to the bus_err window also
+    // return 0 (matches wb_interconnect's unmapped-rdata behavior).
+    assign dmem_rdata = tb_dmem_rdata;
+
+    // dmem-side observability latches: cleared on reset, set whenever the
+    // gated dmem_we / dmem_re fire. Used by 1.2.2 misalignment tests to
+    // prove the pre-issue gate suppressed the bus access.
+    reg seen_dmem_we;
+    reg seen_dmem_re;
+    always @(posedge clk) begin
+        if (rst) begin
+            seen_dmem_we <= 1'b0;
+            seen_dmem_re <= 1'b0;
+        end else begin
+            if (dmem_we) seen_dmem_we <= 1'b1;
+            if (dmem_re) seen_dmem_re <= 1'b1;
+        end
+    end
 
     // -------------------------------------------------------------------------
     // DUT — core
@@ -133,6 +170,13 @@ module tb_rv32i_core_csr;
         .mtvec_i(csr_mtvec),
         .mepc_i(csr_mepc),
         .mstatus_mie_i(csr_mstatus_mie),
+        // Phase 1.2.2 at-issue trap source. Driven by the bus-error mock
+        // below; for the original 24 (Phase 1.1 / 1.2.0 / 1.2.1) tests
+        // the mock holds it at 0 because none of those programs issues
+        // loads/stores. Phase 1.2.2 access-fault tests latch a per-test
+        // fault region into `bus_err_lo`/`bus_err_hi` and the mock fires
+        // when a gated load/store hits that window.
+        .bus_error_i(bus_error_mock),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
     );
 
@@ -350,11 +394,25 @@ module tb_rv32i_core_csr;
         end
     endtask
 
+    task clear_dmem;
+        integer i;
+        begin
+            for (i = 0; i < DMEM_WORDS; i = i + 1)
+                tb_dmem[i] = 32'd0;
+        end
+    endtask
+
     task begin_test(input [8*64-1:0] desc);
         begin
             test_num = test_num + 1;
             $display("=== Test %0d: %0s ===", test_num, desc);
             clear_mem;
+            clear_dmem;
+            // Bus-error mock disabled by default — only the access-fault
+            // tests below flip it. Default window is empty (lo > hi).
+            bus_err_active = 1'b0;
+            bus_err_lo     = 32'hFFFF_FFFF;
+            bus_err_hi     = 32'h0000_0000;
             // Pulse reset for two cycles — clears all CSRs (mscratch, mcycle,
             // minstret, mstatus, ...) and the PC. seen_illegal also clears
             // because the always-block has a sync-reset branch.
