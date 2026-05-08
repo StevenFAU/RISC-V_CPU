@@ -130,14 +130,16 @@ module fpga_top #(
     // PINCONNECTEMPTY scope around u_core).
     // mstatus_o from csr_file is debug visibility only — leave unconnected.
 
-    // Phase 1.2.0: trap-entry signals from core to csr_file. Step 2 lights
-    // these up; trap_return stays tied 1'b0 at u_csr_file until 1.2.2's
-    // MRET decode lands. csr_file already enforces the
-    // trap_enter > trap_return > csr_write_op priority internally.
+    // Phase 1.2.0: trap-entry signals from core to csr_file. Phase 1.2.3
+    // adds `core_trap_return` (driven by the core's `mret_m` decode) which
+    // replaces the previous `1'b0` tie on `u_csr_file.trap_return`. csr_file
+    // enforces the trap_enter > trap_return > csr_write_op priority
+    // internally.
     wire        core_trap_enter;
     wire [31:0] core_trap_pc;
     wire [31:0] core_trap_cause;
     wire [31:0] core_trap_tval;
+    wire        core_trap_return;
 
     // Phase 1.2.2: bus-error sideband from wb_interconnect routes into the
     // core's at-issue trap-source composition (load_access_fault /
@@ -172,6 +174,8 @@ module fpga_top #(
         .trap_pc_o(core_trap_pc),
         .trap_cause_o(core_trap_cause),
         .trap_tval_o(core_trap_tval),
+        // Phase 1.2.3 trap-return output to csr_file
+        .trap_return_o(core_trap_return),
         .mtvec_i(csr_mtvec),
         .mepc_i(csr_mepc),
         .mstatus_mie_i(csr_mstatus_mie),
@@ -185,8 +189,9 @@ module fpga_top #(
     // CSR File (Phase 1.1 + 1.2.0)
     // =========================================================================
     // Phase 1.2.0 Step 2: trap-entry inputs are now driven by the core's
-    // trap encoder. trap_return stays tied 1'b0 — 1.2.2's MRET decode is
-    // its consumer. mstatus_o is debug-only; leave unconnected.
+    // trap encoder. Phase 1.2.3: trap_return is now driven by the core's
+    // MRET decode (via core_trap_return). mstatus_o is debug-only; leave
+    // unconnected.
     /* verilator lint_off PINCONNECTEMPTY */
     csr_file u_csr_file (
         .clk(clk), .rst(rst),
@@ -202,8 +207,8 @@ module fpga_top #(
         .trap_pc(core_trap_pc),
         .trap_cause(core_trap_cause),
         .trap_tval(core_trap_tval),
-        // Trap return (MRET) — Phase 1.2.2
-        .trap_return(1'b0),
+        // Trap return (MRET) — Phase 1.2.3
+        .trap_return(core_trap_return),
         // Retirement tick from core (gated on !trap_enter inside the core)
         .instret_tick(core_instret_tick),
         // Outputs to core (consumed by 1.2.0's PC-redirect mux)

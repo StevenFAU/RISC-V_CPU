@@ -85,12 +85,14 @@ module rv32i_core (
     output wire        illegal_inst_o,
 
     // Trap-entry outputs (Phase 1.2.0 Step 2). Drive csr_file's trap ports
-    // directly. `trap_return_o` is intentionally NOT here in 1.2.0 — MRET
-    // is Phase 1.2.2; csr_file.trap_return stays tied 1'b0 at fpga_top.
+    // directly. `trap_return_o` (Phase 1.2.3) drives csr_file.trap_return
+    // from `mret_m`; csr_file already handles the mstatus rotation
+    // (MIE <- MPIE; MPIE <- 1) on trap_return per its 1.0 implementation.
     output wire        trap_enter_o,
     output wire [31:0] trap_pc_o,
     output wire [31:0] trap_cause_o,
     output wire [31:0] trap_tval_o,
+    output wire        trap_return_o,
 
     // Trap-related CSR outputs from csr_file. mtvec_i is consumed by the
     // PC-mux's trap-entry select (1.2.0 Step 2); mepc_i is wired into the
@@ -273,18 +275,19 @@ module rv32i_core (
             );
 
     // =========================================================================
-    // PC-next mux — Phase 1.2.0 Step 2 extends with trap-entry / trap-return
-    // inputs. Trap entry takes highest priority (overrides branch and jump
-    // on the same cycle); trap-return is dead-pathed in 1.2.0 (the select
-    // is a literal 1'b0) and lights up in 1.2.2 by replacing that literal
-    // with the real `trap_return` signal.
+    // PC-next mux — Phase 1.2.0 wired the mtvec_i / mepc_i inputs; Phase
+    // 1.2.3 activates the trap-return select. Trap entry takes highest
+    // priority (overrides trap-return, branch, and jump on the same cycle);
+    // trap-return select is now driven by `mret_m`. trap_enter and mret_m
+    // cannot both fire on the same cycle in M-only operation — MRET itself
+    // does not synchronously fault — but the priority is structurally
+    // correct anyway.
     // =========================================================================
-    wire trap_return_select_dead = 1'b0;  // 1.2.2: replace with trap_return signal
-    assign pc_next = trap_enter_w             ? mtvec_i :
-                     trap_return_select_dead  ? mepc_i :
-                     ctrl_jump                ? jump_target :
-                     branch_taken             ? branch_target :
-                                                pc_plus4;
+    assign pc_next = trap_enter_w  ? mtvec_i :
+                     mret_m        ? mepc_i :
+                     ctrl_jump     ? jump_target :
+                     branch_taken  ? branch_target :
+                                     pc_plus4;
 
     // =========================================================================
     // ALU input muxes
@@ -450,10 +453,17 @@ module rv32i_core (
     // (mtvec_i select on trap_enter_w) and out to fpga_top via the new
     // top-level trap-entry ports below. The PC-mux trap-entry select takes
     // priority over branch/jump per the encoder placement above.
-    assign trap_enter_o = trap_enter_w;
-    assign trap_pc_o    = trap_pc_w;
-    assign trap_cause_o = trap_cause_w;
-    assign trap_tval_o  = trap_tval_w;
+    assign trap_enter_o  = trap_enter_w;
+    assign trap_pc_o     = trap_pc_w;
+    assign trap_cause_o  = trap_cause_w;
+    assign trap_tval_o   = trap_tval_w;
+    // Phase 1.2.3: trap_return_o lights up MRET's effect on csr_file.
+    // csr_file already enforces trap_enter > trap_return priority
+    // internally, so a hypothetical same-cycle assertion of both (which
+    // cannot happen in M-only — MRET does not synchronously fault) is
+    // resolved correctly by csr_file in addition to the PC-mux ordering
+    // above.
+    assign trap_return_o = mret_m;
 
     // =========================================================================
     // Phase 1.1 — illegal-instruction detection + retirement tick
