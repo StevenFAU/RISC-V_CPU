@@ -1,4 +1,5 @@
-// Integration testbench — rv32i_core + csr_file (Phase 1.1 + 1.2.0 + 1.2.1)
+// Integration testbench — rv32i_core + csr_file
+// (Phase 1.1 + 1.2.0 + 1.2.1 + 1.2.2 + 1.2.3)
 //
 // Exercises the SYSTEM-opcode + CSR-instruction integration path and the
 // Phase 1.2.x trap-entry path. NOT a compliance test — directed, scenario-
@@ -92,6 +93,8 @@ module tb_rv32i_core_csr;
     wire [31:0] trap_pc;
     wire [31:0] trap_cause;
     wire [31:0] trap_tval;
+    // Phase 1.2.3 trap-return signal from core to csr_file (MRET).
+    wire        trap_return;
 
     // -------------------------------------------------------------------------
     // IMEM read: combinational, word-addressed.
@@ -198,6 +201,7 @@ module tb_rv32i_core_csr;
         .trap_pc_o(trap_pc),
         .trap_cause_o(trap_cause),
         .trap_tval_o(trap_tval),
+        .trap_return_o(trap_return),
         .mtvec_i(csr_mtvec),
         .mepc_i(csr_mepc),
         .mstatus_mie_i(csr_mstatus_mie),
@@ -212,9 +216,9 @@ module tb_rv32i_core_csr;
     );
 
     // -------------------------------------------------------------------------
-    // DUT — csr_file (Phase 1.2.0: trap-entry inputs now driven by the core's
-    // trap encoder, mirroring fpga_top wiring; trap_return stays tied 0
-    // until 1.2.2's MRET decode lands)
+    // DUT — csr_file (Phase 1.2.0: trap-entry inputs driven by the core's
+    // trap encoder; Phase 1.2.3: trap_return now driven by the core's MRET
+    // decode, mirroring fpga_top wiring)
     // -------------------------------------------------------------------------
     /* verilator lint_off PINCONNECTEMPTY */
     csr_file u_csr_file (
@@ -229,7 +233,7 @@ module tb_rv32i_core_csr;
         .trap_pc(trap_pc),
         .trap_cause(trap_cause),
         .trap_tval(trap_tval),
-        .trap_return(1'b0),
+        .trap_return(trap_return),
         .instret_tick(instret_tick),
         .mtvec_o(csr_mtvec),
         .mepc_o(csr_mepc),
@@ -271,6 +275,33 @@ module tb_rv32i_core_csr;
                 seen_trap_enter <= 1'b1;
             if (trap_enter && instret_tick)
                 trap_with_instret_observed <= 1'b1;
+        end
+    end
+
+    // -------------------------------------------------------------------------
+    // Phase 1.2.3 trap-return probes:
+    //   seen_trap_return            — latches on any trap_return (= MRET) pulse.
+    //   mret_with_instret_observed  — latches if trap_return && instret_tick
+    //                                 fire the same cycle. MUST be 1 after any
+    //                                 successful MRET — MRET retires per spec
+    //                                 (see Decision 4 in PHASE1.2.3_HANDOFF.md).
+    //                                 Load-bearing regression-protection: if a
+    //                                 future change mistakenly gates
+    //                                 instret_tick on `~trap_return`, this
+    //                                 probe goes to 0 and the test fails.
+    // Both clear on reset (begin_test pulses reset).
+    // -------------------------------------------------------------------------
+    reg seen_trap_return;
+    reg mret_with_instret_observed;
+    always @(posedge clk) begin
+        if (rst) begin
+            seen_trap_return           <= 1'b0;
+            mret_with_instret_observed <= 1'b0;
+        end else begin
+            if (trap_return)
+                seen_trap_return <= 1'b1;
+            if (trap_return && instret_tick)
+                mret_with_instret_observed <= 1'b1;
         end
     end
 
@@ -338,9 +369,11 @@ module tb_rv32i_core_csr;
 
     // ECALL  — SYSTEM (0x73), funct3=000, imm12=0x000, rs1=0, rd=0.
     // EBREAK — SYSTEM (0x73), funct3=000, imm12=0x001, rs1=0, rd=0.
+    // MRET   — SYSTEM (0x73), funct3=000, imm12=0x302, rs1=0, rd=0.
     // localparams (not functions) — Verilog-2001 forbids zero-port functions.
     localparam [31:0] ECALL  = 32'h00000073;
     localparam [31:0] EBREAK = 32'h00100073;
+    localparam [31:0] MRET   = 32'h30200073;
 
     // J-type encoder. imm[0] is implicit zero per the JAL encoding (imm[0]
     // bit is not present in the instruction word). Caller passes a 21-bit
@@ -1186,6 +1219,181 @@ module tb_rv32i_core_csr;
                     seen_dmem_re,                    1'b0);
         expect_bool("trap_enter pulsed",
                     seen_trap_enter,                 1'b1);
+
+        // =====================================================================
+        // Phase 1.2.3 — MRET decode, trap_return wiring, PC-mux activation,
+        // end-to-end trap round-trip
+        // =====================================================================
+
+        // ---- TEST 36: MRET decode + carve-out + behavior (no prior trap) ----
+        // Drive an MRET outside any trap context. Set up:
+        //   mtvec  = 0x40 (so we can confirm we DON'T redirect there)
+        //   mepc   = 0x80 (handler-set value, but no real trap occurred)
+        //   mstatus.MIE  = 0
+        //   mstatus.MPIE = 1
+        // After MRET:
+        //   illegal_inst_o never pulsed (MRET is no longer illegal)
+        //   PC redirected to mepc (0x80)
+        //   trap_return pulsed for one cycle
+        //   mstatus.MIE  <- old MPIE = 1
+        //   mstatus.MPIE <- 1 per spec
+        //   trap_enter never pulsed (MRET is not a trapping instruction)
+        begin_test("MRET: decode + carve-out + PC redirect + mstatus rotation");
+        // mtvec = 0x40
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);
+        // mepc = 0x80
+        mem[2]  = enc_addi(5'd2, 5'd0, 12'h080);
+        mem[3]  = csrrw   (5'd0, 5'd2, MEPC);
+        // mstatus = 0x80 (MIE=0, MPIE=1) — bit 7 set, bit 3 clear
+        mem[4]  = enc_addi(5'd3, 5'd0, 12'h080);
+        mem[5]  = csrrw   (5'd0, 5'd3, MSTATUS);
+        // MRET at PC=0x18
+        mem[6]  = MRET;
+        mem[7]  = HALT;                              // unreached
+        mem[32] = HALT;                              // PC=0x80 — MRET lands here
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_bool("illegal_inst_o quiet (MRET is legal in 1.2.3)",
+                    seen_illegal,                    1'b0);
+        expect_bool("trap_enter never pulsed (MRET is not a trap)",
+                    seen_trap_enter,                 1'b0);
+        expect_bool("trap_return pulsed",
+                    seen_trap_return,                1'b1);
+        expect_eq32("PC redirected to mepc (0x80)",
+                    debug_pc,                        32'h00000080);
+        expect_bool("mstatus.MIE  rotated from MPIE (=1)",
+                    u_csr_file.mstatus_mie,          1'b1);
+        expect_bool("mstatus.MPIE set to 1 per spec",
+                    u_csr_file.mstatus_mpie,         1'b1);
+        expect_eq32("mepc unchanged by MRET (still 0x80)",
+                    u_csr_file.mepc_reg,             32'h00000080);
+
+        // ---- TEST 37: MRET retires — instret_tick pulses on MRET cycle ----
+        // Per RISC-V spec, minstret counts retired instructions; MRET is not
+        // carved out. The existing skeleton handles this without modification
+        // (instret_tick = !rst & ~trap_enter_w; trap_enter is 0 on an MRET
+        // cycle). This test is the load-bearing regression-protection for
+        // Decision 4 — if a future change mistakenly gates instret_tick on
+        // ~trap_return, mret_with_instret_observed goes to 0 and this test
+        // fails. Also samples minstret_reg before/after MRET to confirm the
+        // counter advanced through the MRET cycle.
+        begin_test("MRET retires: instret_tick pulses on MRET cycle");
+        // mtvec = 0x40, mepc = 0x80; MRET. Same shape as TEST 36 minus
+        // the mstatus prearm (which is irrelevant for retire-tick semantics).
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);       // 2 retires
+        mem[2]  = enc_addi(5'd2, 5'd0, 12'h080);
+        mem[3]  = csrrw   (5'd0, 5'd2, MEPC);        // 4 retires
+        mem[4]  = MRET;                              // 5 retires (must count!)
+        mem[5]  = HALT;                              // unreached
+        // Handler at 0x80 reads minstret AFTER MRET so we observe the
+        // post-MRET counter value with no further retires before the read.
+        mem[32] = csrrs   (5'd5, 5'd0, MINSTRET);    // 6 retires
+        mem[33] = HALT;
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_bool("trap_return pulsed",
+                    seen_trap_return,                1'b1);
+        expect_bool("instret_tick pulsed on MRET cycle (mret retires)",
+                    mret_with_instret_observed,      1'b1);
+        // Five instructions retired before the CSRRS reads minstret: four
+        // setup ADDI/CSRRW + the MRET itself. The CSRRS retires after the
+        // read, so its value-at-read is 5.
+        expect_eq32("minstret = 5 (post-MRET, read by handler)",
+                    u_core.u_regfile.regs[5],        32'd5);
+
+        // ---- TEST 38: end-to-end ECALL -> handler -> MRET -> resume ----
+        // Architectural milestone for Phase 1.2.3: trap round-trip works.
+        //   PC=0x10 ECALL fires  -> trap-entry to mtvec=0x40
+        //   handler at 0x40:  csrrs t1, mepc, x0    (t1 = 0x10)
+        //                     addi  t1, t1, 4       (t1 = 0x14)
+        //                     csrrw x0, t1, mepc    (mepc = 0x14)
+        //                     mret                  (PC -> 0x14)
+        //   PC=0x14 sentinel addi x10, x0, 0x123  -> retires
+        //   PC=0x18 HALT  (loops)
+        // Assertions:
+        //   x10 = 0x123                  (resume executed the post-ECALL inst)
+        //   debug_pc = 0x18              (HALT after sentinel)
+        //   trap_enter pulsed            (ECALL took the trap)
+        //   trap_return pulsed           (MRET fired inside the handler)
+        //   mret_with_instret_observed   (MRET retired)
+        //   trap_with_instret_observed=0 (ECALL did NOT retire)
+        //   mstatus.MIE rotated back to 1 (pre-trap MIE was 1; handler's
+        //                                  rotation captured it via MPIE)
+        begin_test("ECALL->handler->MRET->resume: roundtrip milestone");
+        // ---- _start ----
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h040);     // x1 = 0x40
+        mem[1]  = csrrw   (5'd0, 5'd1, MTVEC);       // mtvec = 0x40
+        mem[2]  = enc_addi(5'd2, 5'd0, 12'h008);     // x2 = MIE bit
+        mem[3]  = csrrw   (5'd0, 5'd2, MSTATUS);     // mstatus.MIE = 1
+        mem[4]  = ECALL;                             // PC=0x10 — trap here
+        // ---- post-ECALL resume target ----
+        mem[5]  = enc_addi(5'd10, 5'd0, 12'h123);    // PC=0x14 — sentinel
+        mem[6]  = HALT;                              // PC=0x18 — final halt
+        // ---- handler at 0x40 (mem[16]) ----
+        mem[16] = csrrs   (5'd6, 5'd0, MEPC);        // PC=0x40, t1=mepc
+        mem[17] = enc_addi(5'd6, 5'd6, 12'h004);     // PC=0x44, t1+=4
+        mem[18] = csrrw   (5'd0, 5'd6, MEPC);        // PC=0x48, mepc<-t1
+        mem[19] = MRET;                              // PC=0x4C, return
+        mem[20] = HALT;                              // unreached
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_eq32("x10 sentinel = 0x123 (post-ECALL inst executed)",
+                    u_core.u_regfile.regs[10],       32'h00000123);
+        expect_eq32("PC at post-resume HALT (0x18)",
+                    debug_pc,                        32'h00000018);
+        expect_bool("trap_enter pulsed (ECALL trapped)",
+                    seen_trap_enter,                 1'b1);
+        expect_bool("trap_return pulsed (MRET fired in handler)",
+                    seen_trap_return,                1'b1);
+        expect_bool("MRET retired (instret_tick on MRET cycle)",
+                    mret_with_instret_observed,      1'b1);
+        expect_bool("ECALL did NOT retire (instret gated on trap_enter)",
+                    trap_with_instret_observed,      1'b0);
+        expect_bool("mstatus.MIE rotated back to 1 (handler exit)",
+                    u_csr_file.mstatus_mie,          1'b1);
+        expect_bool("mstatus.MPIE set to 1 per spec on MRET",
+                    u_csr_file.mstatus_mpie,         1'b1);
+        expect_eq32("mepc reflects handler's +4 update (0x14)",
+                    u_csr_file.mepc_reg,             32'h00000014);
+        expect_eq32("mcause unchanged by MRET (still 0x0B from ECALL)",
+                    u_csr_file.mcause_reg,           32'h0000000B);
+        expect_bool("illegal_inst_o never pulsed across roundtrip",
+                    seen_illegal,                    1'b0);
+
+        // ---- TEST 39: MRET while not in a trap (mstatus rotation only) ----
+        // Bare MRET as the first non-setup instruction. Default reset state:
+        //   mstatus.MIE  = 0
+        //   mstatus.MPIE = 0
+        //   mepc         = 0    (we set it explicitly to 0x80 for visibility)
+        // Per spec, MRET in M-mode is unconditionally legal here (no privilege
+        // check to fail). The mstatus rotation still happens:
+        //   MIE  <- old MPIE = 0
+        //   MPIE <- 1 per spec
+        // PC redirects to whatever mepc currently holds. rv32mi compliance
+        // tests sometimes invoke MRET in this configuration; verifying it is
+        // well-defined here protects future Phase 1.2.4 work.
+        begin_test("MRET not-in-trap: mstatus rotation + mepc redirect");
+        // mepc = 0x80 (no other state changes; mstatus stays at reset)
+        mem[0]  = enc_addi(5'd1, 5'd0, 12'h080);
+        mem[1]  = csrrw   (5'd0, 5'd1, MEPC);
+        // MRET at PC=0x08
+        mem[2]  = MRET;
+        mem[3]  = HALT;                              // unreached
+        mem[32] = HALT;                              // PC=0x80 — MRET lands here
+        run_for_cycles(CYCLES_PER_TEST);
+        expect_bool("illegal_inst_o quiet",
+                    seen_illegal,                    1'b0);
+        expect_bool("trap_enter never pulsed",
+                    seen_trap_enter,                 1'b0);
+        expect_bool("trap_return pulsed",
+                    seen_trap_return,                1'b1);
+        expect_eq32("PC redirected to mepc (0x80)",
+                    debug_pc,                        32'h00000080);
+        expect_bool("mstatus.MIE  <- old MPIE = 0",
+                    u_csr_file.mstatus_mie,          1'b0);
+        expect_bool("mstatus.MPIE set to 1 per spec",
+                    u_csr_file.mstatus_mpie,         1'b1);
+        expect_bool("MRET retired (instret_tick on MRET cycle)",
+                    mret_with_instret_observed,      1'b1);
 
         // ---- Summary ----
         $display("");

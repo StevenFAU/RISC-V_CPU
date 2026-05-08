@@ -185,6 +185,31 @@ sim-fpga-access-fault:
 		$(TB_DIR)/tb_fpga_top_access_fault.v
 	$(VVP) $(SIM_DIR)/tb_fpga_top_access_fault.vvp
 
+# Run FPGA top-level testbench against the Phase 1.2.3 mret_test asm
+# program. Exercises MRET decode + PC-mux trap-return select + mstatus
+# rotation outside any prior trap context. Needs sim/mret_test.hex
+# (`make asm PROG=mret_test`).
+sim-fpga-mret:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_mret.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_mret.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_mret.vvp
+
+# Run FPGA top-level testbench against the Phase 1.2.3 architectural
+# milestone test: ECALL -> handler -> MRET -> resume round-trip. Handler
+# advances mepc past the 4-byte ECALL and returns; the resumed program
+# prints PASS. Needs sim/ecall_mret_roundtrip_test.hex
+# (`make asm PROG=ecall_mret_roundtrip_test`).
+sim-fpga-ecall-mret-roundtrip:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_ecall_mret_roundtrip.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_ecall_mret_roundtrip.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_ecall_mret_roundtrip.vvp
+
 # Open GTKWave on most recent VCD for a module
 # Usage: make wave MOD=alu
 wave:
@@ -285,4 +310,5 @@ clean:
 .PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr sim-fpga-ecall \
         sim-fpga-ebreak sim-fpga-illegal sim-fpga-misaligned \
         sim-fpga-misaligned-load sim-fpga-misaligned-store sim-fpga-access-fault \
+        sim-fpga-mret sim-fpga-ecall-mret-roundtrip \
         wave asm c clean
