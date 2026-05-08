@@ -338,11 +338,12 @@ module rv32i_core (
     // =========================================================================
     // ECALL: SYSTEM (opcode 0x73), funct3=000, imm12=0x000, rs1=0, rd=0.
     // EBREAK: SYSTEM (opcode 0x73), funct3=000, imm12=0x001, rs1=0, rd=0.
+    // MRET:   SYSTEM (opcode 0x73), funct3=000, imm12=0x302, rs1=0, rd=0.
     // Decoded inline here rather than threading another funct12-aware path
     // through control.v: control.v already collapses funct3=000 into
     // illegal_system, and the rs1/rd/imm12 fields are already plumbed at
-    // this level. MRET (imm12=0x302) stays illegal until 1.2.3 carves it
-    // out of the chain below.
+    // this level. MRET joins ECALL/EBREAK in 1.2.3 — its carve-out term
+    // closes the M-mode SYSTEM funct3=0 chain (see illegal_inst_o below).
     wire ecall_m = (opcode == `OP_SYSTEM)
                 && (funct3 == 3'b000)
                 && (csr_addr_f == 12'h000)
@@ -353,6 +354,11 @@ module rv32i_core (
                  && (csr_addr_f == 12'h001)
                  && (rs1_addr == 5'b0)
                  && (rd_addr == 5'b0);
+    wire mret_m = (opcode == `OP_SYSTEM)
+               && (funct3 == 3'b000)
+               && (csr_addr_f == 12'h302)
+               && (rs1_addr == 5'b0)
+               && (rd_addr == 5'b0);
 
     // Cause-priority encoder inputs — all eight declared per the "design
     // for all consumers at module creation" principle. Only ecall_m drives
@@ -456,16 +462,21 @@ module rv32i_core (
     //   * csr_illegal_i  — CSR-file detected RO write or unimplemented addr
     //   * illegal_system — SYSTEM funct3=0 (ECALL/EBREAK/MRET/WFI), with
     //     legal SYSTEM funct3=0 encodings carved out one at a time:
-    //       ECALL  carved out 1.2.0 (& ~ecall_m)
-    //       EBREAK carved out 1.2.1 (& ~ebreak_m)
-    //       MRET   will be carved out 1.2.3 (& ~mret_m)
-    //     Future SYSTEM funct3=0 instructions (FENCE.I, future Zicsr/Zihint
-    //     encodings) must extend this chain explicitly — do not let them
-    //     silently inherit "is legal" by being unrecognized, and do not let
-    //     them silently inherit "is illegal" by failing to carve out.
+    //       ECALL  carved out 1.2.0 (& ~ecall_m)   — funct3=0, imm12=0x000
+    //       EBREAK carved out 1.2.1 (& ~ebreak_m)  — funct3=0, imm12=0x001
+    //       MRET   carved out 1.2.3 (& ~mret_m)    — funct3=0, imm12=0x302
+    //     Chain is now COMPLETE for all M-mode SYSTEM funct3=0 instructions
+    //     implemented in this CPU. Future instructions in this family
+    //     (Zihintntl variants, hypothetical privileged additions) MUST
+    //     extend this chain with their own explicit ~<inst>_m term per the
+    //     established convention. They cannot silently inherit "is illegal"
+    //     by being unrecognized — that is the bug this convention prevents
+    //     — and they cannot silently inherit "is legal" by failing to
+    //     carve out. Future SYSTEM instructions with funct3 != 0 are
+    //     unaffected by this chain (they take separate decode paths).
     //   * illegal_opcode — unrecognized opcode at the decoder default branch
     // Now consumed in 1.2.1 as the encoder's `illegal_inst` cause source.
-    assign illegal_inst_o = csr_illegal_i | (illegal_system & ~ecall_m & ~ebreak_m) | illegal_opcode;
+    assign illegal_inst_o = csr_illegal_i | (illegal_system & ~ecall_m & ~ebreak_m & ~mret_m) | illegal_opcode;
 
     // Single-cycle core retires every non-reset cycle, EXCEPT on a trap-
     // entry cycle: the trapping instruction did not retire, so minstret
