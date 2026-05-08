@@ -3,6 +3,133 @@
 Running log of fixes/changes landed during Phase 1 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-05-08 (Phase 1.2.3)
+
+- [feat] Phase 1.2.3 — fourth and final sub-phase of the Phase 1.2
+  synchronous trap work. Activates MRET. The skeleton work in 1.2.0
+  (PC-mux `mepc_i` declared but trap-return-select tied `1'b0`;
+  `csr_file.trap_return` declared but tied `1'b0` in fpga_top) was
+  specifically designed so that activation in this sub-phase is a
+  literal-tie-to-live-signal swap on the trap-return path, plus a
+  small decode addition, plus a single-term carve-out chain
+  extension. `csr_file.v` is byte-identical to phase1.2.2-complete —
+  the trap-return interface has been correct since Phase 1.0; this
+  sub-phase only drives an existing input. End-to-end consequence:
+  trap round-trip works for the first time. (commits `705e05a` +
+  `f88aa47` + `a15cb34`)
+- [rtl] `rtl/rv32i_core.v` —
+  - New inline MRET decode at the top level alongside `ecall_m` /
+    `ebreak_m`:
+      `mret_m = (opcode == OP_SYSTEM) && (funct3 == 3'b000)
+             && (csr_addr_f == 12'h302) && (rs1_addr == 5'b0)
+             && (rd_addr == 5'b0)`
+    Continues the convention from 1.2.0/1.2.1: trap-instruction
+    decode happens at the use site (here), not in `control.v`.
+  - `illegal_inst_o` carve-out chain extended with a single
+    `& ~mret_m` term:
+      `illegal_inst_o = csr_illegal_i
+                     | (illegal_system & ~ecall_m & ~ebreak_m & ~mret_m)
+                     | illegal_opcode`
+    **The carve-out chain is now COMPLETE for all M-mode SYSTEM
+    funct3=0 instructions implemented in this CPU**
+    (ECALL 1.2.0 / EBREAK 1.2.1 / MRET 1.2.3). Future instructions
+    in this family (Zihintntl variants, hypothetical privileged
+    additions) MUST extend this chain with their own explicit
+    `~<inst>_m` term per the established convention. They cannot
+    silently inherit "is illegal" by being unrecognized — that is
+    the bug this convention prevents — and they cannot silently
+    inherit "is legal" by failing to carve out. SYSTEM instructions
+    with funct3 != 0 take separate decode paths and are unaffected
+    by this chain. The chain comment at the carve-out site now
+    documents this state.
+  - PC-mux trap-return select activated. The previously dead-pathed
+    `trap_return_select_dead = 1'b0` literal is replaced with `mret_m`:
+      `pc_next = trap_enter_w ? mtvec_i :
+                 mret_m       ? mepc_i :
+                 ctrl_jump    ? jump_target :
+                 branch_taken ? branch_target :
+                                pc_plus4`
+    Priority is structurally `trap_enter > mret > jump > branch > pc+4`.
+    `trap_enter` and `mret_m` cannot both fire on the same cycle in
+    M-only operation — MRET itself does not synchronously fault — but
+    the priority is structurally correct anyway.
+  - New top-level output port `trap_return_o`. Driven directly from
+    `mret_m`. Wired through `fpga_top.v` to `csr_file.trap_return`,
+    replacing the previous `1'b0` tie. csr_file's existing 1.0
+    implementation handles the `MIE <- MPIE; MPIE <- 1` rotation on
+    `trap_return` and enforces the
+    `trap_enter > trap_return > csr_write_op` priority internally.
+  - **MRET retires.** Per RISC-V spec, `minstret` counts retired
+    instructions; the spec does not carve out MRET. The existing
+    skeleton handles this without modification because `trap_enter`
+    and `trap_return` are separate signals: on an MRET cycle,
+    `trap_enter=0`, `trap_return=1`, and
+    `instret_tick = !rst & ~trap_enter` pulses normally. The
+    asymmetry with the trapping instruction (which does NOT retire)
+    is correct — the trapping instruction was aborted into the
+    handler; MRET completes and exits the handler. The new TEST 37
+    in `tb_rv32i_core_csr` is the load-bearing regression-protection
+    test: it asserts `instret_tick` and `trap_return` fire on the
+    same cycle. If a future change mistakenly gates `instret_tick`
+    on `~trap_return`, that probe goes to 0 and TEST 37 fails
+    immediately.
+- [rtl] `rtl/fpga_top.v` —
+  - New internal wire `core_trap_return` connecting the core's new
+    `trap_return_o` output to `u_csr_file.trap_return`. The previous
+    `1'b0` tie on the csr_file instance is removed. No waivers added
+    or removed; `mstatus_mie_i` keeps its UNUSEDSIGNAL waiver
+    (Phase 2 interrupts is its consumer).
+- [rtl] `rtl/csr_file.v` — **unchanged. Byte-identical to
+  `phase1.2.2-complete`.** The `trap_return` interface has been
+  correct since Phase 1.0 and is exercised by `tb_csr_file` Category 7
+  (Trap return); this sub-phase only drives an existing input.
+- [tb] `tb/tb_rv32i_core_csr.v` — 4 new directed tests (36-39),
+  28 new assertions; total 153/153 (was 125/125):
+  - Wired the core's new `trap_return_o` into `csr_file.trap_return`
+    (replacing the prior `1'b0` tie). Added `seen_trap_return` and
+    `mret_with_instret_observed` probes alongside the existing
+    trap-enter probes.
+  - 36: **MRET decode + carve-out + behavior** — drives MRET outside
+    any trap context with mstatus.MIE=0/MPIE=1; verifies
+    `illegal_inst_o` quiet, `trap_enter` never pulsed, `trap_return`
+    pulsed, PC redirected to `mepc`, MIE rotated from MPIE, MPIE=1.
+  - 37: **MRET retires** — load-bearing regression-protection. Asserts
+    `mret_with_instret_observed=1` and that `minstret` advanced
+    through the MRET cycle (reads minstret in the handler post-redirect
+    via CSRRS; expected value 5 = four setup retires + the MRET).
+  - 38: **End-to-end ECALL -> handler -> MRET -> resume roundtrip**.
+    Architectural milestone test for Phase 1.2.3. ECALL traps to
+    `mtvec`; handler reads `mepc`, advances by 4, writes back, MRETs;
+    resumed program executes the post-ECALL sentinel `addi x10, x0,
+    0x123`. Asserts ECALL did NOT retire, MRET DID retire, mstatus.MIE
+    rotated back to 1, mepc reflects the handler's `+4` update.
+  - 39: **MRET while not in a trap (mstatus rotation only)** — bare
+    MRET from reset state (MIE=0, MPIE=0). mstatus rotates
+    (MIE<-0, MPIE<-1) and PC redirects to mepc. rv32mi compliance
+    occasionally invokes MRET in this configuration; verifying it is
+    well-defined here protects future Phase 1.2.4 work.
+- [tb/sw] New end-to-end FPGA-top tests:
+  - `sw/mret_test.S` + `tb/tb_fpga_top_mret.v` + Makefile target
+    `sim-fpga-mret`. Minimal MRET smoke test on the synthesized SoC.
+    Sets mtvec to a fail handler (so any spurious trap is caught),
+    sets mepc to the resume target, prearms mstatus, executes MRET,
+    verifies the rotation and prints PASS over UART.
+  - `sw/ecall_mret_roundtrip_test.S` +
+    `tb/tb_fpga_top_ecall_mret_roundtrip.v` + Makefile target
+    `sim-fpga-ecall-mret-roundtrip`. **Architectural milestone**:
+    ECALL -> handler reads mepc, adds 4, writes back, MRET ->
+    resumed program prints PASS. Proves the round-trip works
+    end-to-end through the synthesized SoC including UART output.
+- [doc] Phase 1.2.3 closes the synchronous trap work. Every M-mode
+  synchronous cause source is wired and observably tested
+  (inst_addr_misaligned, illegal_inst, ebreak, load_addr_misaligned,
+  load_access_fault, store_addr_misaligned, store_access_fault,
+  ecall_m). The trap round-trip path is end-to-end tested. The
+  M-mode SYSTEM funct3=0 carve-out chain is complete. Phase 1.2.4
+  is the cross-cutting validation step (rv32mi compliance setup +
+  `sw/traps_test.c` C-level trap handler) — no new RTL there; just
+  exercising the work landed across 1.2.0-1.2.3.
+
 ## 2026-05-07 (Phase 1.2.2)
 
 - [feat] Phase 1.2.2 — third sub-phase of the Phase 1.2 trap work.
