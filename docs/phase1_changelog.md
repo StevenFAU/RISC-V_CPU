@@ -3,6 +3,124 @@
 Running log of fixes/changes landed during Phase 1 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-05-09 (Phase 1.2.4)
+
+- [feat] Phase 1.2.4 — fifth sub-phase of the Phase 1.2 trap work.
+  **First sub-phase since Phase 0.2 with no RTL changes.** The
+  deliverable is test infrastructure: a C runtime extension and a
+  cross-cutting end-to-end trap test exercising every M-mode
+  synchronous cause source built up across 1.2.0-1.2.3 from a
+  single binary, plus the FPGA-top harness wiring that runs it.
+  (commits `f684326` + `8e30c55` + `b083430`)
+- [sw] `sw/crt0.S` extended with an optional `_mtvec_setup` weak
+  hook called immediately before `main`. Programs that take traps
+  provide a strong `_mtvec_setup` override that writes their
+  handler trampoline address into `mtvec` via `csrw`. Programs
+  that don't take traps inherit the no-op default and `mtvec`
+  stays at whatever reset put there. **mtvec setup happens in
+  software, not via testbench backdoor** (PHASE1.2.4_HANDOFF.md
+  Decision 5) — the same C binary runs identically on simulation
+  and on real hardware.
+- [sw] `sw/traps_test.c` — single C program with one dispatcher
+  trap handler that decodes `mcause` and routes to per-cause
+  observation logic for all eight M-mode synchronous causes:
+    - 0  inst_addr_misaligned   — JAL with imm[1]=1 (.word 0x0060006F)
+    - 2  illegal_instruction    — CSRRW to RO mvendorid
+                                  (.word 0xF1129EF3, per Decision 8 —
+                                  only path where the regfile_we gate
+                                  is observable from one instruction)
+    - 3  breakpoint             — EBREAK
+    - 4  load_addr_misaligned   — LH at 0x00010001
+    - 5  load_access_fault      — LW from 0xF0000000 (per Decision 9 —
+                                  reuses 1.2.2's verified address)
+    - 6  store_addr_misaligned  — SH at 0x00010025
+    - 7  store_access_fault     — SW to 0xF0000000
+    - 11 ecall_m                — ECALL
+  Each per-cause handler asserts `mcause`, `mepc`, `mtval` and
+  the `mstatus` MIE/MPIE rotation; the trigger PC is captured via
+  `lla` of an inline label co-located with each trapping
+  instruction so the expected `mepc` is the exact PC the trap
+  path writes. **MRET round-trip is implicitly tested by the
+  dispatcher pattern** (Decision 4): every cause's handler advances
+  `mepc + 4` and MRETs out to continue the test, so progressing
+  past cause N requires the round-trip to work. Output is "PASS\r\n"
+  over UART after all eight causes verify; "FAIL\r\n" + per-cause
+  hex dump otherwise. Direct UART writes — no newlib `printf` —
+  to keep the binary small and avoid pulling in unrelated syscall
+  stubs.
+- [sw] `sw/traps_test_trampoline.S` — standard caller-saved-register
+  save/restore wrapper at `mtvec`. `.balign 4` satisfies the
+  `mtvec.BASE` alignment (csr_file's `mtvec.MODE` hardwired to 0,
+  direct mode). Saves `t0-t6 / a0-a7 / ra` to the trapped program's
+  stack, calls `trap_dispatcher` (C function), restores, `mret`s.
+  Callee-saved registers (`s0-s11 / sp / gp / tp`) are preserved
+  by `trap_dispatcher`'s normal ABI compliance. The trampoline uses
+  the trapped program's `sp` — `traps_test.c` never traps from a
+  context with `sp` invalid (crt0 sets `sp` before main), so this
+  is safe.
+- [build] Makefile —
+  - `CFLAGS_C` bumped from `-march=rv32i` to `-march=rv32i_zicsr`
+    so the C inline asm in `traps_test.c` can use `csrr`/`csrw`
+    on `mcause`/`mepc`/`mtval`/`mstatus` directly. Harmless for
+    `hello_c.c` — the toolchain just permits the encoding.
+  - New `c-traps` target mirrors the existing `c` build pattern,
+    pulls in `crt0.S` + `traps_test.c` + `traps_test_trampoline.S`,
+    skips `syscalls.c` (unused — `traps_test.c` uses direct UART
+    writes). Emits `sim/traps_test.hex` (IMEM, ~1.7 KB .text) and
+    `sim/traps_test_dmem.hex` (DMEM, ~280 bytes .rodata + .data +
+    bss reservation).
+  - New `sim-fpga-traps` target mirrors `sim-fpga-c` against
+    `tb/tb_fpga_top_traps.v`.
+- [tb] `tb/tb_fpga_top_traps.v` — duplicate-and-rename of
+  `tb/tb_fpga_top_c.v` (the existing IMEM_INIT/DMEM_INIT
+  C-program TB template). IMEM depth 1024 words (4 KB) — sized
+  for `traps_test.elf` .text. Captures 6 UART bytes; expects
+  "PASS\r\n". On FAIL the per-cause hex dump emitted by
+  `traps_test.c` shows up in the RX log preceding the FAIL banner,
+  pinpointing which cause(s) misbehaved.
+- [tb] `tb/tb_compliance.v`: **NO extension required for 1.2.4.**
+  The harness reads its program image into the unified 16 KB
+  byte-addressed memory, fetches instructions combinationally,
+  and runs `_start` naturally with no fast-forward — so a
+  trap-taking program's `_mtvec_setup` would run as expected,
+  and PC redirects to handler addresses are not flagged as
+  anomalies. The harness does NOT instantiate `csr_file` (rv32ui
+  exercises no CSR ops, so trap-entry outputs are tied off in
+  the dut instance), which means actual trap-taking under
+  `tb_compliance` requires CSR-file integration. **That wiring
+  lands in 1.2.5** alongside the rv32mi env work and is correctly
+  out of scope for 1.2.4. `traps_test.c` runs via
+  `sim-fpga-traps` on the FPGA-top harness (which has `csr_file`
+  wired through `fpga_top` since 1.1), so the 1.2.4 deliverable
+  is unblocked.
+- [doc] Phase 1.2.4 closes the cross-cutting validation step for
+  the synchronous trap path. The harness extensions added here —
+  C runtime hook for software-driven `mtvec` setup, dispatcher /
+  trampoline pattern, end-to-end FPGA-top trap-taking TB — are
+  the foundation for **1.2.5's rv32mi compliance bringup**, which
+  will reuse the same software-driven-mtvec idiom inside a
+  custom rv32mi env and add CSR-file integration to
+  `tb_compliance` so the existing harness can host trap-taking
+  rv32mi programs. 1.2.4 deliberately did NOT pre-build any
+  rv32mi env, expected-failures classification, or compliance
+  triage scaffolding — that's 1.2.5's clean-slate job, informed
+  by what the C dispatcher pattern surfaced.
+- [verify] Cross-cutting validation —
+  - `sim-fpga-traps` PASS, "PASS\r\n" received correctly.
+  - All 10 carry-forward sim-fpga tests PASS (csr / ecall /
+    ebreak / illegal / misaligned / misaligned-load /
+    misaligned-store / access-fault / mret / ecall-mret-roundtrip).
+  - All 19 unit testbenches PASS.
+  - rv32ui regression 37/37, **byte-identical cycle counts to
+    `phase1.2.3-complete`** (and therefore to `phase1.1-complete`
+    through five sub-phases of trap work). The runtime change
+    does not affect rv32ui — those programs link standalone
+    without `crt0.S` and the `-march` bump only enables an opt-in
+    instruction set the rv32ui toolchain path doesn't reach.
+  - Verilator lint clean.
+  - `git diff phase1.2.3-complete -- rtl/` empty: no RTL files
+    modified.
+
 ## 2026-05-08 (Phase 1.2.3)
 
 - [feat] Phase 1.2.3 — fourth and final sub-phase of the Phase 1.2
