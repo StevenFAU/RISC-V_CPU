@@ -251,7 +251,10 @@ asm: $(SW_DIR)/$(PROG).S
 #   -fdata-sections
 #   -Wl,--gc-sections          — drop unused library functions at link time.
 #   -T sw/c_link.ld            — Harvard-bus-aware linker script (see file header).
-CFLAGS_C = -march=rv32i -mabi=ilp32 \
+# Phase 1.2.4: bumped to rv32i_zicsr so C programs can read/write CSRs via
+# inline asm (sw/traps_test.c uses csrr/csrw on mcause/mepc/mtval/mstatus
+# from trap_dispatcher). Harmless for hello_c — emits the same code.
+CFLAGS_C = -march=rv32i_zicsr -mabi=ilp32 \
            -nostartfiles -specs=nano.specs \
            -Os -ffunction-sections -fdata-sections \
            -Wl,--gc-sections \
@@ -302,6 +305,51 @@ c: $(SW_DIR)/$(PROG).c $(SW_DIR)/crt0.S $(SW_DIR)/syscalls.c $(SW_DIR)/c_link.ld
 	@echo "---- ELF section sizes ($(PROG).elf) ----"
 	@$(RISCV_SIZE) $(SIM_DIR)/$(PROG).elf
 
+# Build the Phase 1.2.4 C trap-dispatcher test. Pulls in the trampoline
+# (sw/traps_test_trampoline.S, sits at mtvec) alongside crt0.S and the
+# C source. Skips syscalls.c — traps_test.c uses direct UART writes and
+# does not pull in newlib's printf, so the syscall stubs are unused.
+c-traps: $(SW_DIR)/traps_test.c $(SW_DIR)/traps_test_trampoline.S \
+         $(SW_DIR)/crt0.S $(SW_DIR)/c_link.ld
+	@mkdir -p $(SIM_DIR)
+	@if [ "$(RISCV_GCC)" = "TOOLCHAIN_NOT_FOUND" ]; then \
+		echo ""; \
+		echo "ERROR: no RISC-V gcc with newlib-nano found."; \
+		echo ""; \
+		echo "  Discovery probed:"; \
+		echo "    /opt/riscv/bin/riscv32-unknown-elf-gcc"; \
+		echo "    $$HOME/riscv/bin/riscv32-unknown-elf-gcc"; \
+		echo "    riscv32-unknown-elf-gcc on PATH"; \
+		echo ""; \
+		echo "  See docs/toolchain.md for the canonical build procedure."; \
+		echo "  Override with: make c-traps RISCV_GCC=/path/to/riscv32-unknown-elf-gcc"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "Using RISCV_GCC = $(RISCV_GCC)"
+	$(RISCV_GCC) $(CFLAGS_C) \
+		-o $(SIM_DIR)/traps_test.elf \
+		$(SW_DIR)/crt0.S $(SW_DIR)/traps_test.c $(SW_DIR)/traps_test_trampoline.S
+	# Extract IMEM (.text + .text.init) → word-addressed hex.
+	$(RISCV_OBJCOPY) -O verilog \
+		--only-section=.text \
+		$(SIM_DIR)/traps_test.elf $(SIM_DIR)/traps_test_text.byte.hex
+	python3 $(SIM_DIR)/make_imem_hex.py \
+		$(SIM_DIR)/traps_test_text.byte.hex $(SIM_DIR)/traps_test.hex
+	# Extract DMEM (.rodata + .data), shift addresses from 0x00010000 → 0,
+	# then convert to word-addressed hex.
+	$(RISCV_OBJCOPY) -O verilog \
+		--only-section=.rodata --only-section=.data \
+		--change-section-address .rodata-0x00010000 \
+		--change-section-address .data-0x00010000 \
+		$(SIM_DIR)/traps_test.elf $(SIM_DIR)/traps_test_dmem.byte.hex
+	python3 $(SIM_DIR)/make_dmem_hex.py \
+		$(SIM_DIR)/traps_test_dmem.byte.hex $(SIM_DIR)/traps_test_dmem.hex
+	@rm -f $(SIM_DIR)/traps_test_text.byte.hex $(SIM_DIR)/traps_test_dmem.byte.hex
+	@echo ""
+	@echo "---- ELF section sizes (traps_test.elf) ----"
+	@$(RISCV_SIZE) $(SIM_DIR)/traps_test.elf
+
 # ---- Cleanup ----
 
 clean:
@@ -311,4 +359,4 @@ clean:
         sim-fpga-ebreak sim-fpga-illegal sim-fpga-misaligned \
         sim-fpga-misaligned-load sim-fpga-misaligned-store sim-fpga-access-fault \
         sim-fpga-mret sim-fpga-ecall-mret-roundtrip \
-        wave asm c clean
+        wave asm c c-traps clean
