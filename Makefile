@@ -197,6 +197,22 @@ sim-fpga-mret:
 		$(TB_DIR)/tb_fpga_top_mret.v
 	$(VVP) $(SIM_DIR)/tb_fpga_top_mret.vvp
 
+# Run FPGA top-level testbench against the Phase 1.2.4 traps_test C
+# program. Cross-cutting end-to-end test of the full M-mode synchronous
+# trap path: dispatcher in C decodes mcause, per-cause handlers verify
+# architectural state, mret returns to next instruction. Exercises all
+# eight cause sources (ECALL / EBREAK / illegal_inst / inst_addr_misaligned
+# / load_addr_misaligned / store_addr_misaligned / load_access_fault /
+# store_access_fault) in one binary. Needs sim/traps_test.hex +
+# sim/traps_test_dmem.hex (produced by `make c-traps`).
+sim-fpga-traps:
+	@mkdir -p $(SIM_DIR)
+	$(IVERILOG) -o $(SIM_DIR)/tb_fpga_top_traps.vvp \
+		-I $(RTL_DIR) \
+		$(wildcard $(RTL_DIR)/*.v) \
+		$(TB_DIR)/tb_fpga_top_traps.v
+	$(VVP) $(SIM_DIR)/tb_fpga_top_traps.vvp
+
 # Run FPGA top-level testbench against the Phase 1.2.3 architectural
 # milestone test: ECALL -> handler -> MRET -> resume round-trip. Handler
 # advances mepc past the 4-byte ECALL and returns; the resumed program
@@ -358,5 +374,5 @@ clean:
 .PHONY: sim sim-top sim-fpga sim-fpga-c sim-fpga-csr sim-fpga-ecall \
         sim-fpga-ebreak sim-fpga-illegal sim-fpga-misaligned \
         sim-fpga-misaligned-load sim-fpga-misaligned-store sim-fpga-access-fault \
-        sim-fpga-mret sim-fpga-ecall-mret-roundtrip \
+        sim-fpga-mret sim-fpga-ecall-mret-roundtrip sim-fpga-traps \
         wave asm c c-traps clean
