@@ -53,19 +53,48 @@ module tb_compliance;
     wire [31:0] debug_pc, debug_instr;
 
     // =========================================================================
+    // CSR file <-> core interface wiring
+    // =========================================================================
+    // Phase 1.2.5 Step 1: csr_file is now instantiated alongside rv32i_core in
+    // this harness, mirroring the fpga_top.v topology. rv32ui programs do not
+    // execute CSR instructions and do not take synchronous traps, so the
+    // csr_file is exercised only by its retirement-counter tick from the core
+    // — its outputs to the core (mtvec/mepc/mstatus_mie) remain at reset
+    // values throughout an rv32ui run. rv32mi tests, conversely, drive the
+    // full CSR + trap path.
+    //
+    // The unified-memory model in this testbench is unchanged. csr_file's
+    // interface to the core is via dedicated CSR / trap-entry ports that
+    // bypass the bus, so the bus-level structural difference between this
+    // harness and fpga_top is not relevant to the integration here.
+    wire [11:0] core_csr_addr;
+    wire        core_csr_read_en;
+    wire [2:0]  core_csr_write_op;
+    wire [31:0] core_csr_write_data;
+    wire [31:0] csr_read_data;
+    wire        csr_illegal;
+    wire        core_instret_tick;
+    wire [31:0] csr_mtvec;
+    wire [31:0] csr_mepc;
+    wire        csr_mstatus_mie;
+    wire        core_trap_enter;
+    wire [31:0] core_trap_pc;
+    wire [31:0] core_trap_cause;
+    wire [31:0] core_trap_tval;
+    wire        core_trap_return;
+
+    // =========================================================================
     // Core instance
     // =========================================================================
-    // Phase 1.1: rv32i_core gained CSR-file interface ports. The compliance
-    // harness exercises only RV32I integer instructions (rv32ui), so no CSR
-    // instructions execute here — tying the CSR inputs to safe defaults and
-    // leaving the outputs unconnected is sound. illegal_inst_o is unconsumed
-    // (Phase 1.2 trap path); rv32ui programs use only allocated opcodes so it
-    // never pulses.
-    //
-    // Phase 1.2.0 added the trap-entry output ports (trap_enter_o /
-    // trap_pc_o / trap_cause_o / trap_tval_o). Left unconnected here — no
-    // rv32ui test fires a synchronous trap, so trap_enter_o never asserts
-    // and the cycle counts stay byte-identical to the pre-1.2 baseline.
+    // illegal_inst_o is consumed internally by the core's trap encoder; no
+    // harness-level consumer (the trap_*_o ports already expose the trap
+    // state). bus_error_i is tied 1'b0 here — there is no wb_interconnect in
+    // this harness, the unified memory model decodes every address inside the
+    // 16 KB window, and access-fault behavior is therefore not exercisable
+    // here. rv32mi access-fault tests, if any, will (E) against the harness
+    // and either be re-classified or sourced from a harness extension in a
+    // later step; Step 1 keeps the tie-off explicit to avoid floating-input
+    // X-propagation.
     /* verilator lint_off PINCONNECTEMPTY */
     rv32i_core dut (
         .clk(clk), .rst(rst),
@@ -74,21 +103,55 @@ module tb_compliance;
         .dmem_addr(dmem_addr), .dmem_wdata(dmem_wdata),
         .dmem_rdata(dmem_rdata), .dmem_we(dmem_we),
         .dmem_re(dmem_re), .dmem_funct3(dmem_funct3),
-        // Phase 1.1 CSR-file interface (tied off — no CSR ops in rv32ui)
-        .csr_addr_o(), .csr_read_en_o(),
-        .csr_write_op_o(), .csr_write_data_o(),
-        .csr_read_data_i(32'd0), .csr_illegal_i(1'b0),
-        .instret_tick_o(),
-        .illegal_inst_o(),
-        // Phase 1.2.0 trap-entry outputs (unused — no traps in rv32ui)
-        .trap_enter_o(), .trap_pc_o(),
-        .trap_cause_o(), .trap_tval_o(),
-        .mtvec_i(32'd0), .mepc_i(32'd0), .mstatus_mie_i(1'b0),
-        // Phase 1.2.2: rv32ui programs only access mapped DMEM, so the
-        // at-issue access-fault path never fires. Tie off so the cause
-        // source resolves to 0 deterministically.
+        // CSR interface
+        .csr_addr_o(core_csr_addr),
+        .csr_read_en_o(core_csr_read_en),
+        .csr_write_op_o(core_csr_write_op),
+        .csr_write_data_o(core_csr_write_data),
+        .csr_read_data_i(csr_read_data),
+        .csr_illegal_i(csr_illegal),
+        .instret_tick_o(core_instret_tick),
+        .illegal_inst_o(/* unconnected — exposed via trap_*_o */),
+        // Trap-entry outputs to csr_file
+        .trap_enter_o(core_trap_enter),
+        .trap_pc_o(core_trap_pc),
+        .trap_cause_o(core_trap_cause),
+        .trap_tval_o(core_trap_tval),
+        // Trap-return output to csr_file (Phase 1.2.3)
+        .trap_return_o(core_trap_return),
+        .mtvec_i(csr_mtvec),
+        .mepc_i(csr_mepc),
+        .mstatus_mie_i(csr_mstatus_mie),
+        // No wb_interconnect in this harness; access faults not exercised.
         .bus_error_i(1'b0),
         .debug_pc(debug_pc), .debug_instr(debug_instr)
+    );
+    /* verilator lint_on PINCONNECTEMPTY */
+
+    // =========================================================================
+    // CSR file instance
+    // =========================================================================
+    // Mirrors fpga_top.v u_csr_file. mstatus_o is debug-only visibility and
+    // unconsumed at harness level (same as fpga_top).
+    /* verilator lint_off PINCONNECTEMPTY */
+    csr_file u_csr_file (
+        .clk(clk), .rst(rst),
+        .csr_addr(core_csr_addr),
+        .csr_read_en(core_csr_read_en),
+        .csr_write_op(core_csr_write_op),
+        .csr_write_data(core_csr_write_data),
+        .csr_read_data(csr_read_data),
+        .csr_illegal(csr_illegal),
+        .trap_enter(core_trap_enter),
+        .trap_pc(core_trap_pc),
+        .trap_cause(core_trap_cause),
+        .trap_tval(core_trap_tval),
+        .trap_return(core_trap_return),
+        .instret_tick(core_instret_tick),
+        .mtvec_o(csr_mtvec),
+        .mepc_o(csr_mepc),
+        .mstatus_mie_o(csr_mstatus_mie),
+        .mstatus_o(/* debug-only — unconsumed */)
     );
     /* verilator lint_on PINCONNECTEMPTY */
 

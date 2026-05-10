@@ -33,9 +33,11 @@ CFLAGS = -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
          -I isa/macros/scalar
 
 # RTL sources for compliance testbench (no imem.v/dmem.v — memory is in testbench)
+# Phase 1.2.5: csr_file.v added — tb_compliance now instantiates the CSR file
+# alongside rv32i_core so trap-taking rv32mi tests can be hosted.
 RTL_SRCS = $(RTL_DIR)/defines.v $(RTL_DIR)/pc.v $(RTL_DIR)/regfile.v \
            $(RTL_DIR)/immgen.v $(RTL_DIR)/control.v $(RTL_DIR)/alu_decoder.v \
-           $(RTL_DIR)/alu.v $(RTL_DIR)/rv32i_core.v
+           $(RTL_DIR)/alu.v $(RTL_DIR)/csr_file.v $(RTL_DIR)/rv32i_core.v
 
 # Compile testbench (once)
 $(BUILD_DIR)/tb_compliance.vvp: $(TB_DIR)/tb_compliance.v $(RTL_SRCS)
