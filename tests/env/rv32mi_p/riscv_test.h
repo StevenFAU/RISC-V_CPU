@@ -106,28 +106,40 @@
   li x30, 0;                                                            \
   li x31, 0;
 
+/* Phase 1.2.5: INIT_PMP, INIT_RNMI, INIT_SATP, DELEGATE_NO_TRAPS bodies
+ * have their CSR writes stubbed where the target CSR is not in our
+ * 13-CSR set (see docs/csr_map.md). Comment form:
+ *   /-* <original instruction> -- stubbed: <CSR> not implemented
+ *    (out-of-scope for Tier 1) *-/
+ * Block-comment style (not //) because these lines sit inside #define
+ * macros with \ continuations; cpp's // strips through the \ and breaks
+ * the macro. The local `la t0, 1f; csrw mtvec, t0; ...; 1:` recover-
+ * trampoline is kept intact in each macro as defense-in-depth: if any
+ * stubbed CSR is reactivated later, an illegal trap on a write redirects
+ * to the macro's 1: label without disturbing the env's outer mtvec.
+ */
 #define INIT_PMP                                                        \
   la t0, 1f;                                                            \
   csrw mtvec, t0;                                                       \
   /* Set up a PMP to permit all accesses */                             \
   li t0, (1 << (31 + (__riscv_xlen / 64) * (53 - 31))) - 1;             \
-  csrw pmpaddr0, t0;                                                    \
+  /* csrw pmpaddr0, t0; -- stubbed: pmpaddr0 not implemented (out-of-scope for Tier 1) */ \
   li t0, PMP_NAPOT | PMP_R | PMP_W | PMP_X;                             \
-  csrw pmpcfg0, t0;                                                     \
+  /* csrw pmpcfg0, t0; -- stubbed: pmpcfg0 not implemented (out-of-scope for Tier 1) */ \
   .align 2;                                                             \
 1:
 
 #define INIT_RNMI                                                       \
   la t0, 1f;                                                            \
   csrw mtvec, t0;                                                       \
-  csrwi CSR_MNSTATUS, MNSTATUS_NMIE;                                    \
+  /* csrwi CSR_MNSTATUS, MNSTATUS_NMIE; -- stubbed: mnstatus not implemented (out-of-scope for Tier 1) */ \
   .align 2;                                                             \
 1:
 
 #define INIT_SATP                                                      \
   la t0, 1f;                                                            \
   csrw mtvec, t0;                                                       \
-  csrwi satp, 0;                                                       \
+  /* csrwi satp, 0; -- stubbed: satp not implemented (out-of-scope for Tier 1) */ \
   .align 2;                                                             \
 1:
 
@@ -135,8 +147,8 @@
   csrwi mie, 0;                                                         \
   la t0, 1f;                                                            \
   csrw mtvec, t0;                                                       \
-  csrwi medeleg, 0;                                                     \
-  csrwi mideleg, 0;                                                     \
+  /* csrwi medeleg, 0; -- stubbed: medeleg not implemented (out-of-scope for Tier 1) */ \
+  /* csrwi mideleg, 0; -- stubbed: mideleg not implemented (out-of-scope for Tier 1) */ \
   .align 2;                                                             \
 1:
 
@@ -227,17 +239,27 @@ reset_vector:                                                           \
         la t0, trap_vector;                                             \
         csrw mtvec, t0;                                                 \
         CHECK_XLEN;                                                     \
-        /* if an stvec_handler is defined, delegate exceptions to it */ \
+        /* if an stvec_handler is defined, delegate exceptions to it.   \
+         * Phase 1.2.5: stvec and medeleg writes stubbed; our M-only    \
+         * impl has neither CSR. Tests defining stvec_handler still     \
+         * have their handler reached because the env's trap_vector     \
+         * dispatches to mtvec_handler (which the rv32mi rv64si-source  \
+         * wrappers #define as stvec_handler under __MACHINE_MODE) by   \
+         * fall-through. The `la t0, stvec_handler; beqz t0, 1f` chain  \
+         * stays because skipping the unreachable block keeps the       \
+         * cycle-count footprint deterministic for tests that don't     \
+         * define stvec_handler.                                        \
+         */                                                             \
         la t0, stvec_handler;                                           \
         beqz t0, 1f;                                                    \
-        csrw stvec, t0;                                                 \
+        /* csrw stvec, t0; -- stubbed: stvec not implemented (out-of-scope for Tier 1) */ \
         li t0, (1 << CAUSE_LOAD_PAGE_FAULT) |                           \
                (1 << CAUSE_STORE_PAGE_FAULT) |                          \
                (1 << CAUSE_FETCH_PAGE_FAULT) |                          \
                (1 << CAUSE_MISALIGNED_FETCH) |                          \
                (1 << CAUSE_USER_ECALL) |                                \
                (1 << CAUSE_BREAKPOINT);                                 \
-        csrw medeleg, t0;                                               \
+        /* csrw medeleg, t0; -- stubbed: medeleg not implemented (out-of-scope for Tier 1) */ \
 1:      csrwi mstatus, 0;                                               \
         init;                                                           \
         EXTRA_INIT;                                                     \
