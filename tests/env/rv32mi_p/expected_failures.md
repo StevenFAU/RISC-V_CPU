@@ -1,21 +1,23 @@
 # rv32mi Expected Failures (Phase 1.2.5)
 
-Records every rv32mi test that fails because the failure mode lies in a
-deliberate non-implementation of this CPU. Each entry is classified as
-(O) — out-of-scope by design — and requires explicit user sign-off
+Records every rv32mi test that fails because the failure mode lies in
+a deliberate non-implementation of this CPU. Each entry is classified
+as (O) — out-of-scope by design — and requires explicit user sign-off
 before being added to this file. Tests that fail for any other reason
 (real bugs, env issues, classification disputes) do NOT land here —
 they are tracked in `docs/tech_debt.md` ((D) entries), fixed in this
 sub-phase ((F) entries in the changelog), or fixed in the env ((E)
 entries in the changelog).
 
-**Status:** initial draft (Phase 1.2.5 Step 2). Finalized in Step 6
-after the first compliance run + user sign-off pass.
+**Status:** Step 2 inventory complete; Checkpoint 2 sign-offs recorded
+below. Finalized in Step 6 after the Step 4 compliance run + any
+Checkpoint 4 sign-offs.
 
-## Pre-classified (O) categories — design-deliberate non-implementations
+## (O) categories — deliberate non-implementations
 
-These categories were declared before any test ran, based on Tier 1
-design decisions:
+These are the design-deliberate non-implementations for Tier 1. Six
+categories total: four declared pre-inventory, two added at Checkpoint
+2 from the source-reading pass.
 
 1. **Interrupts** — `mip` / `mie` / MTIE / MEIE / MTIP / MEIP / MSIE /
    MSIP exercise paths and the interrupt-trap edge. Phase 2 work.
@@ -25,55 +27,48 @@ design decisions:
    `__MACHINE_MODE` macro aliases). M-only implementation.
 4. **`time` / `timeh` CSR reads** — Memory-mapped timer only; CSR
    reads of these addresses trap as illegal.
-
-After source inventory (Step 2), NONE of the 16 rv32mi tests falls
-cleanly into the above four categories. The S-mode-named tests
-(`csr` / `sbreak` / `scall` / `ma_fetch`) are M-mode wrappers via
-`__MACHINE_MODE` and alias s* CSRs to m* equivalents. The `illegal`
-test reaches S-mode and vectored-mtvec code paths but branches to
-`pass` at the MPP-hardwired check before exercising them.
-
-## Proposed (O) classifications — AWAIT USER SIGN-OFF
-
-The Step 2 inventory surfaces two tests that fail for design-deliberate
-non-implementations not covered by the four pre-classified categories.
-These are flagged here as proposed (O); the Step 4 run will confirm
-the failure mode matches the rationale below, and the Checkpoint 4
-report will request sign-off before they become recorded (O).
-
-### breakpoint — proposed (O): Debug-spec triggers (Sdtrig) not implemented
-
-- **Test source:** `rv32i/tests/isa/rv64mi/breakpoint.S` (via
-  `rv32i/tests/isa/rv32mi/breakpoint.S` wrapper).
-- **What it tests:** RISC-V Debug-spec hardware triggers (Sdtrig
-  extension) via `tcontrol`, `tdata1`, `tdata2`, `tselect` CSRs.
-- **Why it fails:** None of those CSRs are in our 13-CSR set
-  (`docs/csr_map.md`). The first `csrs tcontrol, a1` write traps
-  illegal-inst before any breakpoint can be set up.
-- **Rationale for (O):** Sdtrig is an optional extension; Tier 1 does
-  not implement Debug-spec triggers. The test contains a fallback
-  path (`csrw tselect, x0; csrr a1, tselect; bne x0, a1, pass`) for
-  implementations where tselect is hardwired non-zero, but our CSR
-  write to an unimplemented address traps before that path is taken.
-- **Sign-off status:** pending Checkpoint 4 user sign-off.
-
-### pmpaddr — proposed (O): Physical Memory Protection (PMP) not implemented
-
-- **Test source:** `rv32i/tests/isa/rv64mi/pmpaddr.S` (via
-  `rv32i/tests/isa/rv32mi/pmpaddr.S` wrapper).
-- **What it tests:** PMP granularity bit (pmpaddr[G-1]) semantics —
-  writes to `pmpcfg0` / `pmpaddr0` and verifies read-back behavior in
-  NAPOT / OFF modes.
-- **Why it fails:** `pmpcfg0` and `pmpaddr0` are not in our 13-CSR
-  set. The first `csrw pmpcfg0, zero` write traps illegal-inst. The
-  test comment explicitly notes "There's no way to probe for PMP
-  support so we can't just pass in this case" and the handler is
-  `j fail` — a no-PMP implementation cannot satisfy this test by
-  construction.
-- **Rationale for (O):** PMP is an optional extension; Tier 1 does
-  not implement memory protection.
-- **Sign-off status:** pending Checkpoint 4 user sign-off.
+5. **Sdtrig (Debug-spec triggers)** — `tcontrol` / `tdata1` /
+   `tdata2` / `tselect`. Debug-spec extension, not on the Tier 1
+   roadmap; no consumers in our architecture. Added Checkpoint 2.
+6. **PMP (Physical Memory Protection)** — `pmpcfg*` / `pmpaddr*`.
+   M-only architecture has no lower privilege levels for PMP to
+   restrict; no consumers. Added Checkpoint 2.
 
 ## Recorded (O) classifications — signed off
 
-(none yet — populated after Checkpoint 4 user sign-off)
+### breakpoint — (O) Sdtrig
+
+- **Test source:** `tests/isa/rv32mi/breakpoint.S` → `rv64mi/breakpoint.S`.
+- **Failure mode:** First `csrs tcontrol, a1` write traps illegal-inst.
+  tcontrol/tdata1/tdata2/tselect are not in our 13-CSR set.
+- **Category:** Sdtrig (debug-spec triggers not implemented).
+- **Signed off:** Checkpoint 2 (Phase 1.2.5).
+
+### pmpaddr — (O) PMP
+
+- **Test source:** `tests/isa/rv32mi/pmpaddr.S` → `rv64mi/pmpaddr.S`.
+- **Failure mode:** First `csrw pmpcfg0, zero` write traps illegal-inst.
+  pmpcfg0/pmpaddr0 are not in our 13-CSR set. Test's mtvec_handler is
+  `j fail` — by construction, a no-PMP impl cannot satisfy this test.
+- **Category:** PMP (Physical Memory Protection not implemented).
+- **Signed off:** Checkpoint 2 (Phase 1.2.5).
+
+## (F) pre-flagged at Checkpoint 2 — confirmation pending Step 4 run
+
+These are (F)-risk classifications based on source reading. They are
+NOT yet confirmed against an actual run. Step 4 will confirm or refute
+each; if confirmed, fixed in Step 5 with the single-bug-commit
+discipline. Listed here only for audit traceability of the pre-flag
+decisions; they do NOT count as expected failures.
+
+- **ma_fetch** — Test does `csrsi misa, 1 << ('c' - 'a')` in the
+  `__MACHINE_MODE` block. Our `csr_file.v` marks `CSR_MISA` as
+  `is_readonly` → writes trap illegal. Per spec, `misa` is WARL:
+  writes are accepted (and ignored for unsupported bits), reads
+  return the implementation's supported-extensions bitmap. Likely
+  one-line fix in `csr_file.v` to drop `is_readonly` for misa.
+- **shamt** — Test asserts that `.word 0x02051513` (SLLI with
+  shamt[5]=1 / funct7-bit=1) traps illegal_inst on RV32I. If
+  `control.v` doesn't validate funct7 on SLLI/SRLI/SRAI (must be
+  `0000000` for SLLI/SRLI, `0100000` for SRAI), it incorrectly accepts
+  the encoding as legal. Likely a control-decode fix.
