@@ -10,6 +10,7 @@
 module tb_control;
     reg  [6:0] opcode;
     reg  [2:0] funct3;
+    reg  [6:0] funct7;       // Phase 1.2.5: SLLI/SRLI/SRAI funct7 validation
     wire       reg_write, mem_to_reg, mem_write, mem_read, alu_src, branch, jump;
     wire [1:0] alu_op;
     wire       is_csr;
@@ -19,7 +20,7 @@ module tb_control;
     wire       illegal_opcode;
 
     control uut (
-        .opcode(opcode), .funct3(funct3),
+        .opcode(opcode), .funct3(funct3), .funct7(funct7),
         .reg_write(reg_write), .mem_to_reg(mem_to_reg),
         .mem_write(mem_write), .mem_read(mem_read),
         .alu_src(alu_src), .branch(branch), .jump(jump),
@@ -87,6 +88,7 @@ module tb_control;
 
         // ---- Legacy opcodes (funct3 = 0 by default; doesn't affect non-SYSTEM) ----
         funct3 = 3'b000;
+        funct7 = 7'b0000000;
 
         //                              rw m2r mw  mr  as  br  jmp aluop
         opcode = `OP_R_TYPE; #10;
@@ -159,6 +161,39 @@ module tb_control;
         // Verify CUSTOM0 still does NOT pulse illegal_opcode (reserved, not illegal).
         opcode = `OP_CUSTOM0; funct3 = 3'b000; #10;
         check_csr(0, 3'b000, 1'b0, 1'b0, 1'b0,                                       "CUSTOM0: reserved, not illegal");
+
+        // ---- Phase 1.2.5: SLLI/SRLI/SRAI/SLL/SRL/SRA funct7 validation ----
+        // SLL/SLLI/SRL/SRLI require funct7 == 0000000. SRA/SRAI require 0100000.
+        // Anything else with shift funct3 (001 SLL, 101 SRL/SRA) is illegal_inst.
+        // Surfaced by rv32mi/shamt test 3 (.word 0x02051513 = SLLI with funct7
+        // bit 25 set).
+
+        // Legal SLLI: funct3=001, funct7=0000000 -> no illegal
+        opcode = `OP_I_ALU; funct3 = `F3_SLL; funct7 = 7'b0000000; #10;
+        check_csr(0, 3'b000, 1'b0, 1'b0, 1'b0,                                       "SLLI funct7=0 legal");
+
+        // Illegal SLLI: funct7 != 0 (rv32mi/shamt encoding)
+        opcode = `OP_I_ALU; funct3 = `F3_SLL; funct7 = 7'b0000001; #10;
+        check_csr(0, 3'b000, 1'b0, 1'b0, 1'b1,                                       "SLLI funct7=1 illegal");
+
+        // Legal SRLI: funct3=101, funct7=0000000 -> no illegal
+        opcode = `OP_I_ALU; funct3 = `F3_SRL_SRA; funct7 = 7'b0000000; #10;
+        check_csr(0, 3'b000, 1'b0, 1'b0, 1'b0,                                       "SRLI funct7=0 legal");
+
+        // Legal SRAI: funct3=101, funct7=0100000 -> no illegal
+        opcode = `OP_I_ALU; funct3 = `F3_SRL_SRA; funct7 = 7'b0100000; #10;
+        check_csr(0, 3'b000, 1'b0, 1'b0, 1'b0,                                       "SRAI funct7=0x20 legal");
+
+        // Illegal SRL/SRA encoding: funct3=101, funct7 != 0 and != 0x20
+        opcode = `OP_I_ALU; funct3 = `F3_SRL_SRA; funct7 = 7'b0000001; #10;
+        check_csr(0, 3'b000, 1'b0, 1'b0, 1'b1,                                       "SRxI funct7=1 illegal");
+
+        // Same validation applies to R-type SLL/SRL/SRA
+        opcode = `OP_R_TYPE; funct3 = `F3_SLL; funct7 = 7'b0000010; #10;
+        check_csr(0, 3'b000, 1'b0, 1'b0, 1'b1,                                       "R-type SLL funct7=2 illegal");
+
+        // Restore funct7 default for any future additions to this TB
+        funct7 = 7'b0000000;
 
         $display("\n--- Control Tests: %0d passed, %0d failed ---", pass, fail);
         if (fail > 0) $display("*** SOME TESTS FAILED ***");

@@ -531,6 +531,7 @@ module rv32i_core (
     control u_control (
         .opcode(opcode),
         .funct3(funct3),
+        .funct7(instr[31:25]),   // Phase 1.2.5: SLLI/SRLI/SRAI funct7 validation
         .reg_write(reg_write),
         .mem_to_reg(mem_to_reg),
         .mem_write(mem_write),
