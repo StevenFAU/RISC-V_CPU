@@ -26,11 +26,25 @@ RV32UI_TESTS = add addi and andi auipc \
                sub \
                xor xori
 
-# Compilation flags
+# All rv32mi tests (Phase 1.2.5)
+RV32MI_TESTS = breakpoint csr illegal instret_overflow \
+               lh-misaligned lw-misaligned ma_addr ma_fetch \
+               mcsr pmpaddr sbreak scall shamt \
+               sh-misaligned sw-misaligned zicntr
+
+# rv32ui compilation flags
 CFLAGS = -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
          -T link.ld \
          -I env/custom \
          -I isa/macros/scalar
+
+# rv32mi compilation flags. -march=rv32i_zicsr (vs rv32i for rv32ui)
+# is required because rv32mi sources use CSR instructions explicitly.
+# env/rv32mi_p is the project-forked M-mode env (Phase 1.2.5 Step 3).
+MI_CFLAGS = -march=rv32i_zicsr -mabi=ilp32 -nostdlib -nostartfiles \
+            -T env/rv32mi_p/link.ld \
+            -I env/rv32mi_p \
+            -I isa/macros/scalar
 
 # RTL sources for compliance testbench (no imem.v/dmem.v — memory is in testbench)
 # Phase 1.2.5: csr_file.v added — tb_compliance now instantiates the CSR file
@@ -90,7 +104,42 @@ run-all: $(BUILD_DIR)/tb_compliance.vvp test-all
 dump: $(BUILD_DIR)/$(TEST).dump
 	@cat $<
 
+# rv32mi build rules. Prefix rv32mi_ keeps these distinct from the
+# rv32ui pattern rule above so they cannot collide on test names.
+$(BUILD_DIR)/rv32mi_%.elf: isa/rv32mi/%.S
+	@mkdir -p $(BUILD_DIR)
+	$(GCC) $(MI_CFLAGS) -o $@ $<
+
+# Compile all rv32mi tests
+test-rv32mi-all: $(patsubst %,$(BUILD_DIR)/rv32mi_%.hex,$(RV32MI_TESTS))
+
+# Run a single rv32mi test: make run-rv32mi TEST=csr
+run-rv32mi-one: $(BUILD_DIR)/tb_compliance.vvp $(BUILD_DIR)/rv32mi_$(TEST).hex
+	$(VVP) $(BUILD_DIR)/tb_compliance.vvp +firmware=$(BUILD_DIR)/rv32mi_$(TEST).hex
+
+# Run all rv32mi tests and report results (mirror of run-all for rv32ui)
+run-rv32mi: $(BUILD_DIR)/tb_compliance.vvp test-rv32mi-all
+	@echo "================================================================"
+	@echo "RV32MI Compliance Test Results"
+	@echo "================================================================"
+	@pass=0; fail=0; timeout=0; total=0; \
+	for test in $(RV32MI_TESTS); do \
+		total=$$((total + 1)); \
+		result=$$($(VVP) $(BUILD_DIR)/tb_compliance.vvp +firmware=$(BUILD_DIR)/rv32mi_$$test.hex 2>&1 | grep -E "PASS|FAIL|TIMEOUT"); \
+		if echo "$$result" | grep -q "^PASS"; then \
+			status="PASS"; pass=$$((pass + 1)); \
+		elif echo "$$result" | grep -q "^FAIL"; then \
+			status="FAIL"; fail=$$((fail + 1)); \
+		else \
+			status="TIMEOUT"; timeout=$$((timeout + 1)); \
+		fi; \
+		printf "  %-18s %s\n" "$$test" "$$result"; \
+	done; \
+	echo "================================================================"; \
+	echo "Total: $$total  Pass: $$pass  Fail: $$fail  Timeout: $$timeout"; \
+	echo "================================================================"
+
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: test test-all run run-all dump clean
+.PHONY: test test-all run run-all dump test-rv32mi-all run-rv32mi run-rv32mi-one clean
