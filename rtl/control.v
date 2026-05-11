@@ -109,6 +109,31 @@ module control (
                 // Deliberately NOT illegal_opcode: reserved opcode space.
             end
 
+            `OP_MISC_MEM: begin
+                // FENCE (funct3=000) and FENCE.I (funct3=001). Both decoded
+                // as NOP on this microarchitecture:
+                //   * FENCE constrains memory ordering between hart and other
+                //     observers. Our single-cycle, single-hart core has no
+                //     store buffer, no reorder buffer, and a strictly
+                //     sequential memory model — every load/store completes
+                //     before the next instruction issues. There is no
+                //     ordering to enforce; NOP is conformant.
+                //   * FENCE.I synchronizes the instruction and data streams.
+                //     Our core has no I-cache and fetches from the same
+                //     unified memory hierarchy as data accesses; any store
+                //     to instruction memory is visible to the next fetch
+                //     without explicit synchronization. NOP is conformant.
+                // All control signals stay at safe defaults — no writeback,
+                // no memory access, no branch, no trap.
+                //
+                // Phase 1.2.5 prerequisite: env/p's RVTEST_PASS / RVTEST_FAIL
+                // macros emit `fence;` as the first instruction; without
+                // this decode path, every rv32mi test infinite-loops at the
+                // fail trampoline. The rv32ui-minimal env (env/custom)
+                // avoids fence, which is why rv32ui passed before this
+                // commit — FENCE was simply never executed.
+            end
+
             `OP_SYSTEM: begin
                 // funct3 != 0 => CSR instruction (CSRRW/S/C and immediate forms).
                 // funct3 == 0 => ECALL/EBREAK/MRET/WFI placeholder (illegal in 1.1).
