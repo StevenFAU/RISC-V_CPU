@@ -294,14 +294,10 @@ module tb_csr_file;
 
         // ====================================================================
         // Category 3: Read-only CSRs reject writes (csr_illegal asserts; the
-        // RO storage value doesn't change).
+        // RO storage value doesn't change). misa moved to Category 3b -- it
+        // is WARL, not RO, per the privileged spec.
         // ====================================================================
         $display("\n--- Category 3: RO CSRs reject writes ---");
-
-        try_write_ro(CSR_MISA,      tmp32[0]);
-        expect_true("misa write -> csr_illegal", tmp32[0] === 1'b1);
-        do_read(CSR_MISA, tmp32);
-        expect_eq32("misa unchanged after RO write", tmp32, 32'h4000_0100);
 
         try_write_ro(CSR_MVENDORID, tmp32[0]);
         expect_true("mvendorid write -> csr_illegal", tmp32[0] === 1'b1);
@@ -327,6 +323,22 @@ module tb_csr_file;
         csr_read_en = 1'b1;
         #1;
         expect_true("read of 0x7C0 -> csr_illegal", csr_illegal === 1'b1);
+        @(posedge clk); #1;
+        idle_inst;
+
+        // ====================================================================
+        // Category 3b: misa is WARL. Writes are silently accepted (no
+        // csr_illegal, no storage update). Reads always return MISA_VAL.
+        // Phase 1.2.5: rv32mi/ma_fetch test 8 (csrsi misa, ...) exercises
+        // this; if misa traps as RO the test's mtvec_handler treats the
+        // unexpected trap as a fail.
+        // ====================================================================
+        $display("\n--- Category 3b: misa WARL (writes accepted, no storage) ---");
+
+        try_write_ro(CSR_MISA, tmp32[0]);
+        expect_true("misa write -> no csr_illegal (WARL)", tmp32[0] === 1'b0);
+        do_read(CSR_MISA, tmp32);
+        expect_eq32("misa unchanged after WARL write", tmp32, 32'h4000_0100);
         idle_inst;
         @(posedge clk); #1;
 

@@ -13,7 +13,8 @@
 // originals):
 //
 //   0x300 mstatus    R/W (mask: MIE bit 3, MPIE bit 7; MPP=11 hardwired)
-//   0x301 misa       RO  (= 32'h40000100 — MXL=32, I-bit set)
+//   0x301 misa       WARL (read returns 32'h40000100 — MXL=32, I-bit set;
+//                          writes silently accepted, no storage update)
 //   0x304 mie        R/W (mask: MEIE bit 11, MTIE bit 7, MSIE bit 3)
 //   0x305 mtvec      R/W (mask: BASE bits [31:2]; MODE [1:0]=00 hardwired)
 //   0x340 mscratch   R/W (no mask)
@@ -157,7 +158,12 @@ module csr_file (
         read_value_pre = 32'b0;
         case (csr_addr)
             CSR_MSTATUS:   read_value_pre = mstatus_val;
-            CSR_MISA:      begin read_value_pre = MISA_VAL;     is_readonly = 1'b1; end
+            // misa is WARL per the privileged spec: writes are accepted
+            // without trap, but storage is never updated -- reads always
+            // return MISA_VAL. is_readonly stays at its 0 default so write
+            // attempts do not assert csr_illegal; the absence of a
+            // write_misa wire below means no storage update occurs.
+            CSR_MISA:      read_value_pre = MISA_VAL;
             CSR_MIE:       read_value_pre = mie_val;
             CSR_MTVEC:     read_value_pre = mtvec_reg;
             CSR_MSCRATCH:  read_value_pre = mscratch_reg;
