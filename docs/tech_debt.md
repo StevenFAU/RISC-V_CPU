@@ -135,6 +135,46 @@ and `actions/cache@v4` → `actions/cache@v5` in
 
 ---
 
+## R-type non-shift funct7 validation — deferred from Phase 1.2.5
+
+**What's missing:** Phase 1.2.5 (commit `6bd91a0`) added funct7
+validation for shift instructions (SLLI/SRLI/SRAI/SLL/SRL/SRA) to
+pass `rv32mi/shamt`. The remaining R-type instructions
+(ADD/SUB/SLT/SLTU/XOR/OR/AND) still decode silently with non-spec
+funct7 values. Per RV32I spec, funct7 must be `0000000` for
+ADD/SLT/SLTU/XOR/OR/AND/SLL/SRL and `0100000` for SUB/SRA; anything
+else is illegal_inst.
+
+**Why deferred:** Single-bug-per-commit discipline. No current
+rv32mi test exercises this surface, and the shamt commit's scope
+was deliberately limited to shifts. Bundling R-type non-shift
+validation would have broadened the fix's blast radius without a
+test to gate it.
+
+**Failure mode if it surfaces:** A future extended-compliance suite
+(or M-extension test that uses the R-type funct7 space for MUL/DIV
+encoding overlap checks) exercises an invalid R-type encoding and
+expects illegal_inst. Our decoder treats it as the legal instruction
+with the same funct3, producing the wrong result silently.
+
+**Repro:**
+```
+.word 0x02000033    # ADD with funct7=0000001 -- should trap illegal,
+                    # currently decodes as ADD x0, x0, x0 silently.
+```
+
+**Trigger to close:** when extended compliance (riscv-arch-tests) or
+M-extension (mul/div) work surfaces this gap, OR proactively when a
+Tier-2 phase touches R-type decode.
+
+**Sketch of fix:** extend the `OP_R_TYPE` case in `rtl/control.v`
+with funct7 validation for the non-shift funct3 values. Pattern
+already exists for SLL/SRL_SRA — just add the analogous check for
+ADD_SUB (allow `0000000` or `0100000`) and for SLT/SLTU/XOR/OR/AND
+(require `0000000`). Add corresponding `tb/tb_control.v` checks.
+
+---
+
 ## `time`/`timeh` CSR aliasing — deferred from Phase 1.0
 
 **What's missing:** Reads of CSR addresses 0xC01 (`time`) and 0xC81

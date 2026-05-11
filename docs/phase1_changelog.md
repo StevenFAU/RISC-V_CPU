@@ -3,6 +3,255 @@
 Running log of fixes/changes landed during Phase 1 of `TIER1_ROADMAP.md`.
 Newest entries at top.
 
+## 2026-05-10 (Phase 1.2.5)
+
+- [feat] Phase 1.2.5 — sixth and final sub-phase of the Phase 1.2
+  trap work. **rv32mi compliance bringup** against the upstream
+  riscv-tests suite. Structurally distinct from every prior sub-phase:
+  rather than "we built X and tested X," this one is "an external
+  compliance suite tests the spec implementation; failures are
+  diagnostic information." N=16 rv32mi tests classified — 14 PASS,
+  2 signed-off (O), zero (F) / (D) / (E) / (U) remaining. rv32ui
+  37/37 byte-identical to `phase1.2.4-complete` through 11 commits.
+  **Phase 1.2 synchronous trap work is complete and rv32mi-compliant
+  within the documented (O) scope.** No Phase 2 (interrupt) work
+  was done.
+
+  Commits (chronological):
+  `cf60e7b` csr_file integration into tb_compliance ·
+  `044e307` rv32mi inventory + pre-classification ·
+  `6e3bcc1` Checkpoint 2 sign-offs + (F) pre-flag notes ·
+  `985cc9f` fork riscv-tests env/p/ to tests/env/rv32mi_p/ (verbatim) ·
+  `0d7ba67` env stub unimplemented CSR inits ·
+  `342adda` control.v decode FENCE-as-NOP (rv32mi prerequisite) ·
+  `1b60a4f` env memory map adjustments ·
+  `d2674b0` rv32mi first compliance run + triage ·
+  `ee02594` fix misa WARL semantics ·
+  `6bd91a0` fix SLLI/SRLI/SRAI funct7 validation ·
+  [Step 6 closure commit, this entry].
+
+- [tb] `tb/tb_compliance.v` — instantiates `csr_file` alongside
+  `rv32i_core`, mirroring the `fpga_top.v` topology. CSR / trap-entry
+  / MRET interface ports route between core and csr_file via dedicated
+  wires; the unified 16 KB byte-addressed memory model is unchanged.
+  `bus_error_i` tied `1'b0` (no `wb_interconnect` in this harness;
+  unified-mem decodes every in-range address; access faults not
+  exercisable here). `illegal_inst_o` and `csr_file.mstatus_o` left
+  unconnected per `fpga_top.v` precedent. No `irq_*` ports exist on
+  `rv32i_core` today (Phase 2 work).
+
+- [env] `tests/env/rv32mi_p/` — project-tracked fork of upstream
+  `rv32i/tests/env/p/`. Three fork commits for diff reviewability:
+    1. **Verbatim copy** from `env/p/`. Establishes the baseline so
+       subsequent diffs are isolated patches.
+    2. **Stubbed unimplemented-CSR writes** in startup macros
+       (`INIT_PMP`, `INIT_RNMI`, `INIT_SATP`, `DELEGATE_NO_TRAPS`)
+       and inline `csrw stvec, t0` / `csrw medeleg, t0` in
+       `reset_vector`. Eight CSR writes stubbed across five sites;
+       targets: `pmpaddr0`, `pmpcfg0`, `CSR_MNSTATUS`, `satp`,
+       `medeleg` (×2), `mideleg`, `stvec`. Local `la t0, 1f; csrw
+       mtvec, t0; ...; 1:` recover-trampoline preserved in each
+       macro as defense-in-depth. Comment form is block-comment
+       `/* original-inst -- rationale */` rather than `//` because
+       cpp's `//` strips through macro `\` continuations and breaks
+       expansion; documented in a header comment in the file. All
+       remaining csrw/csrwi target implemented CSRs (mtvec / mie /
+       mstatus / mepc / mhartid / mcause).
+    3. **Memory map adapted** from base `0x80000000` to `0x00000000`
+       for `tb_compliance`'s 16 KB unified-mem window. `.tohost`
+       pinned at `0x1000` matching `TOHOST_ADDR`. Explicit linker
+       ASSERTs on `.text.init` overflowing `0x1000` and `_end`
+       overflowing `0x4000`. Trampoline shape, CSR-init order, and
+       tohost mechanism preserved verbatim per the fork discipline
+       (§4.3 of handoff).
+
+  **Location correction:** originally directed to live at
+  `rv32i/tests/env/rv32mi_p/`, but `rv32i/` is an untracked external
+  git checkout in the project tree (own `.git` inside, listed as one
+  untracked entry by `git status`). Redirected to project-root path
+  `tests/env/rv32mi_p/` (parallel to existing tracked
+  `tests/env/custom/`) at Checkpoint 2 sign-off. Upstream-diff
+  visibility preserved via `diff -r rv32i/tests/env/p/
+  tests/env/rv32mi_p/`.
+
+- [env] `tests/env/rv32mi_p/expected_failures.md` — full audit
+  trail of (O) classifications. The pre-classified (O) category
+  list grew from four (interrupts / vectored mtvec / S-mode /
+  time-timeh) to **six** with the two new categories added at
+  Checkpoint 2 sign-off: **Sdtrig** (Debug-spec hardware triggers)
+  and **PMP** (Physical Memory Protection). Two signed-off (O)
+  recordings: `breakpoint` (Sdtrig) and `pmpaddr` (PMP).
+
+- [env] **`mscratch` handler-stack trampoline pattern documented
+  but not required.** env/p's trap_vector is single-stack with
+  caller-saved register save/restore handled by the test's own
+  `mtvec_handler`; no rv32mi test deliberately corrupts `sp`, so
+  the single-stack approach suffices. The `csrrw sp, mscratch, sp`
+  atomic-swap pattern is reserved for Phase 6+ OS-arc work (or
+  custom tests that intentionally exercise stack edge cases) and
+  documented in `docs/CHAT_HANDOFF.md` so future readers know when
+  to invoke it.
+
+- [build] `tests/Makefile` —
+  - `RV32MI_TESTS` list (16 tests).
+  - `MI_CFLAGS = -march=rv32i_zicsr -mabi=ilp32 -nostdlib
+    -nostartfiles -T env/rv32mi_p/link.ld -I env/rv32mi_p
+    -I isa/macros/scalar`. **`-march=rv32i_zicsr` (vs `rv32i` for
+    rv32ui)** is required because rv32mi sources use CSR instructions
+    (`csrr`, `csrw`, `csrrs`, …) explicitly; rv32ui sources never do.
+    This is an audit-clear build-flag difference between the two
+    suites, NOT a cross-cutting convention.
+  - `test-rv32mi-all` / `run-rv32mi` / `run-rv32mi-one TEST=<name>`
+    targets mirror the existing `test-all` / `run-all` / `run TEST=`
+    patterns for rv32ui. Build artifacts prefixed `rv32mi_*` to avoid
+    pattern-rule collisions on shared `BUILD_DIR`.
+  - `RTL_SRCS` for `tb_compliance` gains `csr_file.v` (without it
+    iverilog cannot resolve the `csr_file` reference in the harness).
+
+- [rtl] **(F) fix — FENCE-as-NOP decode** (commit `342adda`).
+  `rtl/control.v` and `rtl/defines.v` gain an `OP_MISC_MEM`
+  (`7'b0001111`) case decoding both FENCE (funct3=000) and FENCE.I
+  (funct3=001) as NOP. Without this, env/p's `RVTEST_PASS` and
+  `RVTEST_FAIL` macros (both begin with `fence;`) infinite-loop every
+  rv32mi test at the fail trampoline: `fence` traps illegal_inst →
+  env's `trap_vector` dispatches to test's `mtvec_handler` → `j fail`
+  → `RVTEST_FAIL` → `fence` → repeat. The rv32ui-minimal env
+  (`env/custom`) sidesteps fence in its PASS/FAIL macros, which is
+  why rv32ui passed before this commit — FENCE was simply never
+  executed. NOP is spec-conformant on this microarchitecture
+  (single-cycle, single-hart, no I-cache, strictly sequential
+  memory model). Chronologically landed as Step 3 (d) — a
+  prerequisite surfaced during Step 3 smoke testing rather than via
+  Step 4 triage, but applied with full Step 5 (F)-fix discipline
+  (single-bug commit, full rv32ui re-run, byte-identity preserved
+  because FENCE doesn't appear in compiled rv32ui `.text`).
+
+- [rtl] **(F) fix — misa WARL semantics** (commit `ee02594`,
+  Step 5 a). `rtl/csr_file.v` previously marked `CSR_MISA` as
+  `is_readonly=1`, causing writes to trap illegal_inst. Per the
+  privileged spec, misa is WARL: writes are accepted without trap,
+  but storage is never updated; reads always return the
+  implementation's fixed value. Fix uses `csr_file`'s third
+  CSR-mode state (`is_readonly=0` + no `write_misa` wire → writes
+  silently swallowed, storage never updates). `tb/tb_csr_file.v`
+  moved the misa test from Category 3 (RO CSRs reject writes) to a
+  new Category 3b (misa WARL). The other RO CSRs (mvendorid,
+  mhartid, cycle, etc.) remain in Category 3 — they are genuinely
+  RO per spec. Made `rv32mi/ma_fetch` PASS.
+
+- [rtl] **(F) fix — SLLI/SRLI/SRAI funct7 validation** (commit
+  `6bd91a0`, Step 5 b). `rtl/control.v` gains a `funct7` input
+  (wired from `instr[31:25]` in `rtl/rv32i_core.v`). Inside
+  `OP_R_TYPE` and `OP_I_ALU` cases, the decoder now asserts
+  `illegal_opcode=1` when `funct3` is a shift but `funct7` doesn't
+  match the spec-required pattern (`0000000` for SLL/SLLI/SRL/SRLI;
+  `0100000` for SRA/SRAI). `illegal_opcode`'s semantic broadens
+  from "unknown opcode" to "decode-time illegal" — comment updated.
+  `tb/tb_control.v` gains 6 new check_csr expects covering legal
+  SLLI/SRLI/SRAI + illegal shift encodings (including the
+  rv32mi/shamt `.word 0x02051513` case). Scope deliberately limited
+  to shifts; R-type non-shift funct7 validation filed in
+  `docs/tech_debt.md` per single-bug-per-commit discipline. Made
+  `rv32mi/shamt` PASS.
+
+- [docs] **`docs/CHAT_HANDOFF.md` (new)** — five project-wide
+  conventions accumulated across the Phase 1 trap work:
+  1. `trap_pc` vs `trap_tval` masking distinction (1.2.1 closure).
+  2. Module-level TB input tieoff convention (1.2.2 / 1.2.4 origin).
+  3. `mscratch` handler-stack trampoline (documented, not required
+     for the rv32mi suite — reserved for sp-corrupting trap tests).
+  4. Phase scope principle (sub-phases land capability or coverage;
+     reg-only steps fold into the next phase that lands real
+     capability).
+  5. csr_file three-state CSR model (RO-trap / RW-stored / WARL —
+     discovered during Step 5 a misa fix).
+
+  Previously a claude.ai-side meta-doc; now in-repo at
+  `docs/CHAT_HANDOFF.md`. Sub-phase handoffs reference these
+  conventions; new sub-phases add to them as patterns crystallize.
+
+- [docs] `docs/tech_debt.md` — one new (D) entry: **R-type
+  non-shift funct7 validation** (deferred from Step 5 b's shamt fix
+  scope). Surfaces when a future extended-compliance or M-extension
+  phase exercises invalid R-type encodings. Includes repro snippet.
+
+### rv32mi summary
+
+| Cat | Count | Tests |
+|---|---|---|
+| (P) Pass | 14 | csr, illegal, instret_overflow, lh-misaligned, lw-misaligned, ma_addr, ma_fetch, mcsr, sbreak, scall, shamt, sh-misaligned, sw-misaligned, zicntr |
+| (O) Sdtrig (signed off Checkpoint 2) | 1 | breakpoint |
+| (O) PMP (signed off Checkpoint 2) | 1 | pmpaddr |
+| (F) / (D) / (E) / (U) remaining | 0 | — |
+
+### rv32ui regression — byte-identical at every commit
+
+| Stage | rv32ui | Cycle drift vs phase1.2.4-complete |
+|---|---|---|
+| After `cf60e7b` (csr_file integration) | 37/37 | zero |
+| After `342adda` (FENCE-as-NOP) | 37/37 | zero |
+| After `ee02594` (misa WARL) | 37/37 | zero |
+| After `6bd91a0` (shamt funct7) | 37/37 | zero |
+
+Per-test cycle counts identical: `add=459 addi=236 and=479 andi=192
+auipc=53 beq=285 bge=303 bgeu=328 blt=285 bltu=310 bne=285 jal=49
+jalr=109 lb=247 lbu=247 lh=263 lhu=272 lw=277 lui=59 or=482 ori=199
+sb=448 sh=501 sw=508 sll=487 slli=235 slt=453 slti=231 sltiu=231
+sltu=453 sra=506 srai=250 srl=500 srli=244 sub=451 xor=481 xori=201`.
+
+### Verification
+
+- `make run-rv32mi` final: 14 P / 2 F (both (O) signed off, zero
+  surprises).
+- `make run-all` rv32ui: 37/37, byte-identical to
+  `phase1.2.4-complete` (and therefore byte-identical through six
+  sub-phases of Phase 1.2 trap work).
+- 19 unit testbenches PASS (`make sim MOD=<each>`). `tb_csr_file`
+  gained Category 3b (2 new expects, 2 retired); `tb_control`
+  gained 6 new shift-funct7 expects.
+- 11 carry-forward sim-fpga tests PASS (csr / ecall / ebreak /
+  illegal / misaligned / misaligned-load / misaligned-store /
+  access-fault / mret / ecall-mret-roundtrip / traps).
+- Verilator lint clean for `--top-module fpga_top -Irtl -Wall
+  rtl/*.v`.
+
+### Confirmed: no Phase 2 (interrupt) work
+
+The pre-classified (O) interrupt category was not triggered by any
+rv32mi test — none of the 16 tests touch `mip`/`mie` outside paths
+that branch away (e.g., `illegal`'s vectored-interrupts block is
+skipped via the MPP-hardwired check before reaching the interrupt
+exercise). All (F) fixes targeted the synchronous trap path or
+instruction-decode surfaces. Phase 2 (interrupt support) remains
+fully untouched.
+
+### Surprises worth carrying forward (recorded in CHAT_HANDOFF.md)
+
+- **rv32mi filename → privilege classification is unreliable.**
+  Every rv32mi `.S` file is a `#include` wrapper over a
+  `rv64mi/*.S` or `rv64si/*.S` source; rv64si wrappers `#define
+  __MACHINE_MODE` which aliases s* CSRs to m* equivalents. So the
+  "S-mode-named" tests (`csr` / `sbreak` / `scall` / `ma_fetch`)
+  run entirely in M-mode against our M-only impl — they do NOT
+  fall into the pre-classified (O) S-mode category. Source-reading
+  catches this; filename inspection misses it.
+
+- **The four pre-declared (O) categories yielded zero pre-runtime
+  classifications.** All deliberate-non-implementation tests that
+  surfaced (`breakpoint`, `pmpaddr`) belonged to NEW categories
+  (Sdtrig, PMP) that emerged from the inventory. The pre-class
+  discipline is still load-bearing — it pre-prunes tests that
+  *would* match the four categories — but the failure mode of
+  "pre-class table predicts nothing useful" is real, and the
+  source-reading pass is what actually generated value.
+
+- **FENCE-not-decoded was masked by the rv32ui-minimal env.** The
+  rv32ui suite passed cleanly because `env/custom`'s RVTEST_PASS/FAIL
+  omit `fence;`. Switching to the upstream env/p brought the gap
+  into view as the first symptom. Carrying-forward note: any future
+  switch from a minimal env to a fuller env should re-run the suite
+  expecting prerequisite gaps to surface.
+
 ## 2026-05-09 (Phase 1.2.4)
 
 - [feat] Phase 1.2.4 — fifth sub-phase of the Phase 1.2 trap work.
